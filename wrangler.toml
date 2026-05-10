@@ -1,6 +1,7 @@
 name = "crypto-research-agent-ui"
-pages_build_output_dir = "frontend/dist"
+pages_build_output_dir = "dist"
 
 [build]
-command = "cd frontend && npm install && npm run build"
+command = "npm install && npm run build"
+cwd = "frontend"
 watch_dir = "frontend"
