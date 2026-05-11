@@ -6,6 +6,11 @@ signals, and renders a research-only Markdown report.
 
 ## Quick Start
 
+Run the Python FastAPI backend and the Vite frontend in separate terminals. The
+frontend dev server does not start the Python backend automatically.
+
+Terminal 1, backend:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -14,12 +19,33 @@ cp .env.example .env
 python -m backend.server
 ```
 
-Then call:
+Verify the backend:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+Then start a report:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/research/report \
   -H "Content-Type: application/json" \
   -d '{"query":"Analyze why BTC dropped today."}'
+```
+
+Expected response shape:
+
+```json
+{
+  "report_id": "...",
+  "status": "processing"
+}
 ```
 
 Check the result:
@@ -29,7 +55,22 @@ curl http://127.0.0.1:8000/api/research/report/<report_id>
 curl http://127.0.0.1:8000/api/research/report/<report_id>/data
 ```
 
-## Cloudflare Pages
+Terminal 2, frontend:
+
+```bash
+npm run dev
+```
+
+In local development, `frontend/vite.config.ts` proxies `/api` to
+`http://127.0.0.1:8000`. That proxy only exists while the Vite dev server is
+running. You can leave `VITE_API_URL` empty locally to use the proxy, or copy
+`frontend/.env.local.example` to `frontend/.env.local` and set it explicitly:
+
+```text
+VITE_API_URL=http://127.0.0.1:8000
+```
+
+## Cloudflare Pages / Production Deployment
 
 The repository root is configured as the Cloudflare project root. Use:
 
@@ -43,10 +84,57 @@ Set the build output directory to:
 frontend/dist
 ```
 
-The frontend calls the backend through `VITE_API_URL`. For production, set that
-Cloudflare Pages environment variable to the public URL where the Python backend
-is running. If it is not set, the frontend falls back to `http://127.0.0.1:8000`
-for local development.
+The frontend calls the report backend through `VITE_API_URL`.
+
+For production, deploy the Python FastAPI backend separately first, for example
+on Render, Railway, Fly.io, a VPS, or another service that can run:
+
+```bash
+python -m backend.server
+```
+
+Then set the Cloudflare Pages build-time environment variable:
+
+```text
+VITE_API_URL=https://your-fastapi-backend-domain.com
+```
+
+`VITE_API_URL` is a Vite build-time variable. If you change it in Cloudflare
+Pages, rebuild and redeploy the frontend.
+
+If production `VITE_API_URL` is missing, the frontend refuses to start report
+generation and shows:
+
+```text
+Missing VITE_API_URL in production. Please set it to the public FastAPI backend URL.
+```
+
+This is intentional. Without `VITE_API_URL`, browser requests would go to the
+current Cloudflare domain, such as `/api/research/report`. The Cloudflare Worker
+in this repository is not the report backend, so that path returns 404.
+
+The current recommended MVP deployment is:
+
+```text
+Cloudflare Pages frontend
+→ VITE_API_URL
+→ external Python FastAPI backend /api/research/*
+```
+
+The Cloudflare Worker remains responsible for webhook and on-chain event routes:
+
+```text
+GET  /health
+POST /api/webhooks/alchemy
+GET  /api/onchain/events?limit=50
+```
+
+Alternative deployment: the Worker can proxy `/api/research/*` to the Python
+backend if you add a `BACKEND_API_URL` Worker environment variable and forwarding
+logic in `src/worker.ts`. In that setup the Worker must preserve method,
+headers, and body, and must handle CORS. This repository does not enable that
+proxy by default because direct frontend-to-FastAPI routing is simpler for the
+current MVP.
 
 ## API Sources
 
