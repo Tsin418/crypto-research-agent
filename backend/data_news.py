@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import UTC, datetime
@@ -188,7 +189,9 @@ async def fetch_news(settings: Settings, asset: str, time_window: str, llm=None)
         errors.extend(etf_errors)
 
     refined: list[dict] = []
-    for event in deduped:
+    semaphore = asyncio.Semaphore(4)
+
+    async def _classify_one(event: dict) -> dict:
         fallback = {
             "category": event.get("category"),
             "asset_related": event.get("asset_related"),
@@ -196,10 +199,11 @@ async def fetch_news(settings: Settings, asset: str, time_window: str, llm=None)
             "impact_level": event.get("impact_level"),
             "confidence": event.get("confidence"),
         }
-        refined_classification = await classify_news_with_llm(llm, event, fallback)
-        event = {**event, **refined_classification}
-        refined.append(event)
-    deduped = refined
+        async with semaphore:
+            return await classify_news_with_llm(llm, event, fallback)
+
+    classifications = await asyncio.gather(*[_classify_one(event) for event in deduped])
+    deduped = [{**event, **classification} for event, classification in zip(deduped, classifications)]
     return LayerResult(
         layer="news",
         source="rss",

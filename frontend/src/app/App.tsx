@@ -42,7 +42,9 @@ export default function App() {
       const { report_id } = await postRes.json();
 
       let reportData;
-      while (true) {
+      const MAX_POLL_RETRIES = 30; // 60-second timeout
+      let retries = 0;
+      while (retries < MAX_POLL_RETRIES) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         const getRes = await fetch(`${baseUrl}/api/research/report/${report_id}`);
         if (!getRes.ok) {
@@ -53,6 +55,11 @@ export default function App() {
         if (reportData.status === 'completed' || reportData.status === 'failed') {
           break;
         }
+        retries++;
+      }
+
+      if (retries >= MAX_POLL_RETRIES && reportData?.status === 'processing') {
+        throw new Error('Report generation timed out after 60 seconds. Please try again.');
       }
 
       const reportMarkdown = reportData.status === 'completed' 

@@ -55,8 +55,8 @@ def _start_liquidation_collector() -> None:
     thread.start()
 
 
-def _start_report_job(report_id: str, request: ReportRequest) -> None:
-    asyncio.run(run_report_job(SETTINGS, STORAGE, report_id, request))
+async def _start_report_job(report_id: str, request: ReportRequest) -> None:
+    await run_report_job(SETTINGS, STORAGE, report_id, request)
 
 
 @asynccontextmanager
