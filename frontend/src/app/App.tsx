@@ -1,20 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
+import { Sidebar } from './components/Sidebar';
 import { ResearchDashboard } from './components/dashboard/ResearchDashboard';
-import type {
-  AssetSelection,
-  AutoScanReport,
-  AutoScanResponse,
-  DashboardData,
-  ReportRecord,
-} from './components/dashboard/types';
+import type { AssetSelection, DashboardData, ReportRecord, ResearchReport, TimeWindow } from './components/dashboard/types';
 
 const RESPONSE_BODY_PREVIEW_LENGTH = 500;
+const MAX_POLL_RETRIES = 30;
+const POLL_INTERVAL_MS = 2000;
 
 function getApiBaseUrl() {
   const baseUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
 
   if (import.meta.env.PROD && !baseUrl) {
-    throw new Error('生产环境缺少 VITE_API_URL，请配置 FastAPI 后端地址。');
+    throw new Error(
+      'Missing VITE_API_URL in production. Please set it to the public FastAPI backend URL.'
+    );
   }
 
   return baseUrl;
@@ -23,13 +22,17 @@ function getApiBaseUrl() {
 async function parseErrorResponse(res: Response, label: string) {
   const body = await res.text().catch(() => '');
   const bodyPreview = body ? ` ${body.slice(0, RESPONSE_BODY_PREVIEW_LENGTH)}` : '';
-  return new Error(`${label}：HTTP ${res.status} ${res.statusText || ''}${bodyPreview}`);
+  return new Error(`${label}: HTTP ${res.status} ${res.statusText || ''}${bodyPreview}`);
+}
+
+function formatFetchError(error: unknown, label: string, url: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(`${label}: network or CORS error while requesting ${url}. ${message}`);
 }
 
 async function requestJson<T>(url: string, label: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init).catch(error => {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label}：网络或 CORS 请求失败。${message}`);
+    throw formatFetchError(error, label, url);
   });
 
   if (!res.ok) {
@@ -39,123 +42,135 @@ async function requestJson<T>(url: string, label: string, init?: RequestInit): P
   return res.json();
 }
 
-function historyToAutoReport(report: ReportRecord): AutoScanReport {
-  return {
-    report_id: report.report_id,
-    asset: (report.asset || 'BTC') as AssetSelection,
-    price_now: report.price_now,
-    price_change_4h_pct: report.price_change_4h_pct,
-    price_change_24h_pct: report.price_change_24h_pct,
-    direction: report.direction,
-    direction_label_zh: report.direction_label_zh,
-    trigger_reason: report.trigger_reason,
-    top_news: report.top_news_json || {
-      title: report.top_news_title || '',
-      url: report.top_news_url || '',
-      source: report.top_news_source || '',
-      reason_zh: '',
-    },
-    report_markdown: report.report_markdown || '',
-    created_at: report.created_at,
-    updated_at: report.updated_at,
-  };
-}
-
-type HistoryMap = Record<AssetSelection, AutoScanReport[]>;
-type ReportMap = Partial<Record<AssetSelection, AutoScanReport>>;
-
 export default function App() {
-  const [selectedAsset, setSelectedAsset] = useState<AssetSelection>('BTC');
-  const [reportsByAsset, setReportsByAsset] = useState<ReportMap>({});
-  const [historyByAsset, setHistoryByAsset] = useState<HistoryMap>({ BTC: [], ETH: [] });
-  const [isLoading, setIsLoading] = useState(true);
+  const [reports, setReports] = useState<ResearchReport[]>([]);
+  const [currentReportId, setCurrentReportId] = useState<string | null>(null);
+  const [asset, setAsset] = useState<AssetSelection>('AUTO');
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>('24h');
+  const [queryDraft, setQueryDraft] = useState('Analyze why BTC dropped today');
+  const [isLoading, setIsLoading] = useState(false);
+  const [processingQuery, setProcessingQuery] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [cacheHit, setCacheHit] = useState<boolean | null>(null);
-  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
 
-  const selectedReport = useMemo(
-    () => reportsByAsset[selectedAsset] || historyByAsset[selectedAsset][0] || null,
-    [historyByAsset, reportsByAsset, selectedAsset],
-  );
+  const currentReport = reports.find(report => report.id === currentReportId) || null;
 
-  const loadHistory = async () => {
-    const baseUrl = getApiBaseUrl();
-    const [btc, eth] = await Promise.all(
-      (['BTC', 'ETH'] as AssetSelection[]).map(asset =>
-        requestJson<{ reports: ReportRecord[] }>(
-          `${baseUrl}/api/research/reports?asset=${asset}&limit=20`,
-          `加载 ${asset} 历史记录失败`,
-        ),
-      ),
-    );
-    setHistoryByAsset({
-      BTC: btc.reports.map(historyToAutoReport),
-      ETH: eth.reports.map(historyToAutoReport),
-    });
-  };
-
-  const enrichReportData = async (report: AutoScanReport): Promise<AutoScanReport> => {
-    const baseUrl = getApiBaseUrl();
-    const dashboardData = await requestJson<DashboardData>(
-      `${baseUrl}/api/research/report/${report.report_id}/data`,
-      `加载 ${report.asset} 数据明细失败`,
-    ).catch(() => undefined);
-    return { ...report, dashboardData };
-  };
-
-  const runScan = async (forceRefresh = false) => {
-    setIsLoading(true);
+  const handleNewResearch = () => {
+    setCurrentReportId(null);
     setErrorMessage(null);
+  };
+
+  const handleSelectReport = (id: string) => {
+    setCurrentReportId(id);
+    setErrorMessage(null);
+  };
+
+  const handleSubmit = async (queryOverride?: string) => {
+    const query = (queryOverride || queryDraft).trim();
+    if (!query || isLoading) {
+      return;
+    }
+
+    setIsLoading(true);
+    setProcessingQuery(query);
+    setErrorMessage(null);
+    setCurrentReportId(null);
+
     try {
       const baseUrl = getApiBaseUrl();
-      const response = await requestJson<AutoScanResponse>(`${baseUrl}/api/research/auto-scan`, '自动扫描失败', {
+      const reportEndpoint = `${baseUrl}/api/research/report`;
+      const payload = {
+        query,
+        asset: asset === 'AUTO' ? undefined : asset,
+        time_window: timeWindow,
+      };
+
+      const start = await requestJson<{ report_id: string }>(reportEndpoint, 'Failed to start report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assets: ['BTC', 'ETH'],
-          time_window: '4h',
-          force_refresh: forceRefresh,
-        }),
+        body: JSON.stringify(payload),
       });
-      const enrichedReports = await Promise.all(response.reports.map(enrichReportData));
-      const nextReports: ReportMap = {};
-      enrichedReports.forEach(report => {
-        nextReports[report.asset] = report;
-      });
-      setReportsByAsset(nextReports);
-      setCacheHit(response.cache_hit);
-      setGeneratedAt(response.generated_at);
-      await loadHistory();
+
+      let reportData: ReportRecord | null = null;
+      for (let retries = 0; retries < MAX_POLL_RETRIES; retries += 1) {
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+        const statusEndpoint = `${baseUrl}/api/research/report/${start.report_id}`;
+        reportData = await requestJson<ReportRecord>(statusEndpoint, 'Failed to fetch report status');
+
+        if (reportData.status === 'completed' || reportData.status === 'failed') {
+          break;
+        }
+      }
+
+      if (!reportData || reportData.status === 'processing') {
+        throw new Error('Report generation timed out after 60 seconds. Please try again.');
+      }
+
+      let dashboardData: DashboardData | undefined;
+      if (reportData.status === 'completed') {
+        const dataEndpoint = `${baseUrl}/api/research/report/${start.report_id}/data`;
+        dashboardData = await requestJson<DashboardData>(dataEndpoint, 'Failed to fetch dashboard data');
+      }
+
+      const report: ResearchReport = {
+        id: start.report_id,
+        query,
+        createdAt: reportData.created_at || new Date().toISOString(),
+        metadata: reportData,
+        dashboardData,
+        reportMarkdown:
+          reportData.report_markdown ||
+          (reportData.status === 'failed'
+            ? `Report generation failed: ${reportData.error_message || 'Unknown error'}`
+            : 'Report generated but no markdown was provided.'),
+        error: reportData.status === 'failed' ? reportData.error_message || 'Report generation failed.' : undefined,
+      };
+
+      setReports(prev => [report, ...prev.filter(item => item.id !== report.id)]);
+      setCurrentReportId(report.id);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      const fallbackId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+      const failedReport: ResearchReport = {
+        id: fallbackId,
+        query,
+        createdAt: new Date().toISOString(),
+        reportMarkdown: `**Error:** Could not generate the research dashboard.\n\n${detail}`,
+        error: detail,
+      };
+
+      console.error(error);
       setErrorMessage(detail);
+      setReports(prev => [failedReport, ...prev]);
+      setCurrentReportId(failedReport.id);
     } finally {
       setIsLoading(false);
+      setProcessingQuery(null);
     }
   };
 
-  useEffect(() => {
-    runScan(false);
-  }, []);
-
   return (
-    <div className="h-screen overflow-hidden bg-[#080b0f] text-[#e8edf2]">
+    <div className="flex h-screen overflow-hidden bg-[#f6f6f4] text-[#1f2328]">
+      <Sidebar
+        reports={reports}
+        currentId={currentReportId}
+        onNew={handleNewResearch}
+        onSelect={handleSelectReport}
+      />
       <ResearchDashboard
-        selectedAsset={selectedAsset}
-        report={selectedReport}
-        history={historyByAsset[selectedAsset]}
+        report={currentReport}
+        asset={asset}
+        timeWindow={timeWindow}
+        queryDraft={queryDraft}
         isLoading={isLoading}
+        processingQuery={processingQuery}
         errorMessage={errorMessage}
-        cacheHit={cacheHit}
-        generatedAt={generatedAt}
-        onAssetChange={setSelectedAsset}
-        onRefresh={() => runScan(true)}
-        onHistorySelect={(report) => {
-          setSelectedAsset(report.asset);
-          setReportsByAsset(prev => ({ ...prev, [report.asset]: report }));
-          enrichReportData(report).then(enriched => {
-            setReportsByAsset(prev => ({ ...prev, [enriched.asset]: enriched }));
-          });
+        onAssetChange={setAsset}
+        onTimeWindowChange={setTimeWindow}
+        onQueryChange={setQueryDraft}
+        onGenerate={() => handleSubmit()}
+        onExampleSelect={(query) => {
+          setQueryDraft(query);
+          handleSubmit(query);
         }}
       />
     </div>
