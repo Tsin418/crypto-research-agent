@@ -1,13 +1,11 @@
-import React, { useState } from 'react';
-import { Sidebar, Report } from './components/Sidebar';
-import { ChatArea } from './components/ChatArea';
-import { PanelLeftOpen } from 'lucide-react';
-
-interface Chat extends Report {
-  report: string;
-}
+import { useState } from 'react';
+import { Sidebar } from './components/Sidebar';
+import { ResearchDashboard } from './components/dashboard/ResearchDashboard';
+import type { AssetSelection, DashboardData, ReportRecord, ResearchReport, TimeWindow } from './components/dashboard/types';
 
 const RESPONSE_BODY_PREVIEW_LENGTH = 500;
+const MAX_POLL_RETRIES = 30;
+const POLL_INTERVAL_MS = 2000;
 
 function getApiBaseUrl() {
   const baseUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
@@ -32,129 +30,148 @@ function formatFetchError(error: unknown, label: string, url: string) {
   return new Error(`${label}: network or CORS error while requesting ${url}. ${message}`);
 }
 
+async function requestJson<T>(url: string, label: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init).catch(error => {
+    throw formatFetchError(error, label, url);
+  });
+
+  if (!res.ok) {
+    throw await parseErrorResponse(res, label);
+  }
+
+  return res.json();
+}
+
 export default function App() {
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [reports, setReports] = useState<ResearchReport[]>([]);
+  const [currentReportId, setCurrentReportId] = useState<string | null>(null);
+  const [asset, setAsset] = useState<AssetSelection>('AUTO');
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>('24h');
+  const [queryDraft, setQueryDraft] = useState('Analyze why BTC dropped today');
   const [isLoading, setIsLoading] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [processingQuery, setProcessingQuery] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleNewChat = () => {
-    setCurrentChatId(null);
+  const currentReport = reports.find(report => report.id === currentReportId) || null;
+
+  const handleNewResearch = () => {
+    setCurrentReportId(null);
+    setErrorMessage(null);
   };
 
-  const handleSelectChat = (id: string) => {
-    setCurrentChatId(id);
+  const handleSelectReport = (id: string) => {
+    setCurrentReportId(id);
+    setErrorMessage(null);
   };
 
-  const currentChat = chats.find(c => c.id === currentChatId) || null;
+  const handleSubmit = async (queryOverride?: string) => {
+    const query = (queryOverride || queryDraft).trim();
+    if (!query || isLoading) {
+      return;
+    }
 
-  const handleSubmit = async (query: string) => {
     setIsLoading(true);
-    setCurrentChatId(null); 
+    setProcessingQuery(query);
+    setErrorMessage(null);
+    setCurrentReportId(null);
 
     try {
       const baseUrl = getApiBaseUrl();
       const reportEndpoint = `${baseUrl}/api/research/report`;
-      const postRes = await fetch(reportEndpoint, {
+      const payload = {
+        query,
+        asset: asset === 'AUTO' ? undefined : asset,
+        time_window: timeWindow,
+      };
+
+      const start = await requestJson<{ report_id: string }>(reportEndpoint, 'Failed to start report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
-      })
-        .catch(error => {
-          throw formatFetchError(error, 'Failed to start report', reportEndpoint);
-        });
+        body: JSON.stringify(payload),
+      });
 
-      if (!postRes.ok) {
-        throw await parseErrorResponse(postRes, 'Failed to start report');
-      }
-
-      const { report_id } = await postRes.json();
-
-      let reportData;
-      const MAX_POLL_RETRIES = 30; // 60-second timeout
-      let retries = 0;
-      while (retries < MAX_POLL_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const statusEndpoint = `${baseUrl}/api/research/report/${report_id}`;
-        const getRes = await fetch(statusEndpoint)
-          .catch(error => {
-            throw formatFetchError(error, 'Failed to fetch report status', statusEndpoint);
-          });
-        if (!getRes.ok) {
-          throw await parseErrorResponse(getRes, 'Failed to fetch report status');
-        }
-        reportData = await getRes.json();
+      let reportData: ReportRecord | null = null;
+      for (let retries = 0; retries < MAX_POLL_RETRIES; retries += 1) {
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+        const statusEndpoint = `${baseUrl}/api/research/report/${start.report_id}`;
+        reportData = await requestJson<ReportRecord>(statusEndpoint, 'Failed to fetch report status');
 
         if (reportData.status === 'completed' || reportData.status === 'failed') {
           break;
         }
-        retries++;
       }
 
-      if (retries >= MAX_POLL_RETRIES && reportData?.status === 'processing') {
+      if (!reportData || reportData.status === 'processing') {
         throw new Error('Report generation timed out after 60 seconds. Please try again.');
       }
 
-      const reportMarkdown = reportData.status === 'completed' 
-        ? reportData.report_markdown || 'Report generated but no markdown provided.'
-        : `Report generation failed: ${reportData.error_message || 'Unknown error'}`;
+      let dashboardData: DashboardData | undefined;
+      if (reportData.status === 'completed') {
+        const dataEndpoint = `${baseUrl}/api/research/report/${start.report_id}/data`;
+        dashboardData = await requestJson<DashboardData>(dataEndpoint, 'Failed to fetch dashboard data');
+      }
 
-      const newChat: Chat = {
-        id: report_id,
+      const report: ResearchReport = {
+        id: start.report_id,
         query,
-        report: reportMarkdown,
-        createdAt: new Date().toISOString()
+        createdAt: reportData.created_at || new Date().toISOString(),
+        metadata: reportData,
+        dashboardData,
+        reportMarkdown:
+          reportData.report_markdown ||
+          (reportData.status === 'failed'
+            ? `Report generation failed: ${reportData.error_message || 'Unknown error'}`
+            : 'Report generated but no markdown was provided.'),
+        error: reportData.status === 'failed' ? reportData.error_message || 'Report generation failed.' : undefined,
       };
-      setChats(prev => [newChat, ...prev]);
-      setCurrentChatId(report_id);
+
+      setReports(prev => [report, ...prev.filter(item => item.id !== report.id)]);
+      setCurrentReportId(report.id);
     } catch (error) {
-      console.error(error);
       const detail = error instanceof Error ? error.message : String(error);
-      const errorChat: Chat = {
-        id: Math.random().toString(36).substring(7),
+      const fallbackId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+      const failedReport: ResearchReport = {
+        id: fallbackId,
         query,
-        report: `**Error:** Could not generate report. Please ensure the backend is running. Details: ${detail}`,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        reportMarkdown: `**Error:** Could not generate the research dashboard.\n\n${detail}`,
+        error: detail,
       };
-      setChats(prev => [errorChat, ...prev]);
-      setCurrentChatId(errorChat.id);
+
+      console.error(error);
+      setErrorMessage(detail);
+      setReports(prev => [failedReport, ...prev]);
+      setCurrentReportId(failedReport.id);
     } finally {
       setIsLoading(false);
+      setProcessingQuery(null);
     }
   };
 
   return (
-    <div className="flex h-screen bg-[#ffffff] text-[#333333] font-sans relative overflow-hidden">
-      {/* Sidebar Transition */}
-      <div 
-        className={`transition-all duration-300 ease-in-out h-full flex-shrink-0 w-[260px] ${
-          isSidebarOpen ? 'ml-0' : '-ml-[260px]'
-        }`}
-      >
-        <Sidebar 
-          reports={chats} 
-          onSelect={handleSelectChat} 
-          currentId={currentChatId} 
-          onNew={handleNewChat}
-          onToggleCollapse={() => setIsSidebarOpen(false)}
-        />
-      </div>
-
-      {/* Floating Open Button */}
-      {!isSidebarOpen && (
-        <button
-          onClick={() => setIsSidebarOpen(true)}
-          className="absolute top-4 left-4 p-2 rounded-md hover:bg-gray-100 text-gray-500 transition-colors z-10"
-          title="Open sidebar"
-        >
-          <PanelLeftOpen size={20} />
-        </button>
-      )}
-
-      <ChatArea 
-        chat={currentChat} 
-        onSubmit={handleSubmit} 
-        isLoading={isLoading} 
+    <div className="flex h-screen overflow-hidden bg-[#f6f6f4] text-[#1f2328]">
+      <Sidebar
+        reports={reports}
+        currentId={currentReportId}
+        onNew={handleNewResearch}
+        onSelect={handleSelectReport}
+      />
+      <ResearchDashboard
+        report={currentReport}
+        asset={asset}
+        timeWindow={timeWindow}
+        queryDraft={queryDraft}
+        isLoading={isLoading}
+        processingQuery={processingQuery}
+        errorMessage={errorMessage}
+        onAssetChange={setAsset}
+        onTimeWindowChange={setTimeWindow}
+        onQueryChange={setQueryDraft}
+        onGenerate={() => handleSubmit()}
+        onExampleSelect={(query) => {
+          setQueryDraft(query);
+          handleSubmit(query);
+        }}
       />
     </div>
   );

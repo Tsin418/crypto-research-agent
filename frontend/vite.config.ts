@@ -28,6 +28,12 @@ export default defineConfig({
     alias: {
       // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
+      // Vite dev mode can select the package's `development` export, but this
+      // install only ships `dev/lib/syntax.js`. Use the stable default export.
+      'micromark-extension-gfm-task-list-item': path.resolve(
+        __dirname,
+        './node_modules/micromark-extension-gfm-task-list-item/index.js'
+      ),
     },
   },
 
