@@ -202,7 +202,7 @@ Expected response:
 Start a report:
 
 ```bash
-curl -X POST https://<space-name>.hf.space/api/research/report \
+curl -X POST https://andrew418-crypto-research-agent.hf.space/api/research/report \
   -H "Content-Type: application/json" \
   -d '{"query":"Analyze why BTC dropped today."}'
 ```
@@ -219,7 +219,7 @@ Expected response shape:
 Then set the frontend build-time environment variable:
 
 ```text
-VITE_API_URL=https://<space-name>.hf.space
+VITE_API_URL=https://andrew418-crypto-research-agent.hf.space
 ```
 
 Rebuild and redeploy the frontend after changing `VITE_API_URL`.

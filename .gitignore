@@ -1,0 +1,20 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+.DS_Store
+**/.DS_Store
+serve.pid
+.tools/
+.agents/
+skills-lock.json
+*.swp
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example

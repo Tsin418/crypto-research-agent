@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crypto-research-agent",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-10",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "frontend/dist",
+    "not_found_handling": "single-page-application"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "ETH_LARGE_TRANSFER_THRESHOLD_ETH": "500"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crypto_research_agent",
+      "database_id": "df989cd6-1892-45b3-811c-b42ec78765b8"
+    }
+  ]
+}
