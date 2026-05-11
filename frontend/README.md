@@ -28,7 +28,7 @@ Set `VITE_API_URL` to the public URL of the deployed FastAPI backend before
 building:
 
 ```text
-VITE_API_URL=https://your-fastapi-backend-domain.com
+VITE_API_URL=https://andrew418-crypto-research-agent.hf.space
 ```
 
 This variable is embedded at build time, so rebuild and redeploy the frontend

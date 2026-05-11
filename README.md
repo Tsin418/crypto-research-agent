@@ -96,7 +96,7 @@ python -m backend.server
 Then set the Cloudflare Pages build-time environment variable:
 
 ```text
-VITE_API_URL=https://your-fastapi-backend-domain.com
+VITE_API_URL=https://andrew418-crypto-research-agent.hf.space
 ```
 
 `VITE_API_URL` is a Vite build-time variable. If you change it in Cloudflare
