@@ -1,73 +1,48 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import hmac
 import threading
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from contextlib import asynccontextmanager
+from typing import Any
 
-from pydantic import ValidationError
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.compliance import REFUSAL_MARKDOWN, is_trading_advice_request
 from backend.config import get_settings
 from backend.data_onchain import normalize_alchemy_webhook
-from backend.models import ReportRequest
+from backend.feishu import alchemy_ingest_summary, send_feishu_text
 from backend.liquidations import run_bybit_liquidation_collector
+from backend.models import ReportRequest
 from backend.orchestrator import run_report_job
 from backend.storage import Storage
 
 
 SETTINGS = get_settings()
-STORAGE = Storage(SETTINGS.db_path)
+STORAGE = Storage(SETTINGS.db_path, SETTINGS.onchain_events_json_path)
 
 
-def _json_body(handler: BaseHTTPRequestHandler) -> dict:
-    length = int(handler.headers.get("Content-Length", "0"))
-    if length == 0:
-        return {}
-    raw = handler.rfile.read(length)
-    return json.loads(raw.decode("utf-8"))
-
-
-def _send_json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-
-def _is_authorized_webhook(handler: BaseHTTPRequestHandler, query: dict[str, list[str]]) -> bool:
+def _is_authorized_webhook(
+    *,
+    query_secret: str | None,
+    header_secret: str | None,
+    authorization: str | None,
+) -> bool:
     secret = SETTINGS.alchemy_webhook_secret
     if not secret:
         return True
-    header_secret = handler.headers.get("X-Webhook-Secret", "")
-    auth = handler.headers.get("Authorization", "")
-    query_secret = query.get("secret", [""])[0]
-    return header_secret == secret or auth == f"Bearer {secret}" or query_secret == secret
+    candidates = (
+        header_secret or "",
+        authorization or "",
+        f"Bearer {query_secret or ''}",
+        query_secret or "",
+    )
+    expected = (secret, f"Bearer {secret}")
+    return any(hmac.compare_digest(candidate, value) for candidate in candidates for value in expected)
 
-
-def _handle_alchemy_webhook(handler: BaseHTTPRequestHandler, parsed) -> None:
-    query = parse_qs(parsed.query)
-    if not _is_authorized_webhook(handler, query):
-        _send_json(handler, 401, {"error": "unauthorized webhook"})
-        return
-    try:
-        payload = _json_body(handler)
-    except json.JSONDecodeError as exc:
-        _send_json(handler, 400, {"error": "invalid json", "details": str(exc)})
-        return
-    events = normalize_alchemy_webhook(payload, SETTINGS.eth_large_transfer_threshold_eth)
-    for index, event in enumerate(events):
-        event_id = f"alchemy:{event.get('hash') or 'unknown'}:{event.get('amount')}:{index}"
-        STORAGE.save_onchain_event(event_id, "ETH", "alchemy_webhook", event)
-    _send_json(handler, 202, {"status": "accepted", "stored_events": len(events)})
 
 def _start_liquidation_collector() -> None:
     if not SETTINGS.bybit_liquidation_collector_enabled:
@@ -80,97 +55,108 @@ def _start_liquidation_collector() -> None:
     thread.start()
 
 
-def _start_job(report_id: str, request: ReportRequest) -> None:
-    def runner() -> None:
-        asyncio.run(run_report_job(SETTINGS, STORAGE, report_id, request))
-
-    thread = threading.Thread(target=runner, daemon=True)
-    thread.start()
+def _start_report_job(report_id: str, request: ReportRequest) -> None:
+    asyncio.run(run_report_job(SETTINGS, STORAGE, report_id, request))
 
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = "CryptoResearchAgent/0.1"
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _start_liquidation_collector()
+    yield
 
-    def do_OPTIONS(self) -> None:
-        _send_json(self, 200, {"ok": True})
 
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/")
-        if path == "/health":
-            _send_json(self, 200, {"status": "ok"})
-            return
+app = FastAPI(title="Crypto Research Agent", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Webhook-Secret"],
+)
 
-        parts = path.strip("/").split("/")
-        if len(parts) == 4 and parts[:3] == ["api", "research", "report"]:
-            report = STORAGE.get_report(parts[3])
-            if report is None:
-                _send_json(self, 404, {"error": "report not found"})
-                return
-            _send_json(self, 200, report.model_dump())
-            return
 
-        if len(parts) == 5 and parts[:3] == ["api", "research", "report"] and parts[4] == "data":
-            report = STORAGE.get_report(parts[3])
-            if report is None:
-                _send_json(self, 404, {"error": "report not found"})
-                return
-            _send_json(
-                self,
-                200,
-                {
-                    "report_id": parts[3],
-                    "snapshots": STORAGE.get_snapshots(parts[3]),
-                    "normalized_signals": STORAGE.get_normalized_signals(parts[3]),
-                    "api_call_logs": STORAGE.get_api_call_logs(parts[3]),
-                },
-            )
-            return
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
-        _send_json(self, 404, {"error": "not found"})
 
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/")
-        if path == "/api/webhooks/alchemy":
-            _handle_alchemy_webhook(self, parsed)
-            return
-        if path != "/api/research/report":
-            _send_json(self, 404, {"error": "not found"})
-            return
-        try:
-            request = ReportRequest(**_json_body(self))
-        except (ValidationError, json.JSONDecodeError) as exc:
-            _send_json(self, 400, {"error": "invalid request", "details": str(exc)})
-            return
+@app.post("/api/webhooks/alchemy", status_code=202)
+async def alchemy_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    secret: str | None = None,
+    x_webhook_secret: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    if not _is_authorized_webhook(
+        query_secret=secret,
+        header_secret=x_webhook_secret,
+        authorization=authorization,
+    ):
+        raise HTTPException(status_code=401, detail="unauthorized webhook")
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid json: {exc}") from exc
 
-        report_id = str(uuid.uuid4())
-        STORAGE.create_report(report_id, request.query)
-        if is_trading_advice_request(request.query):
-            STORAGE.complete_report(
-                report_id,
-                asset=request.asset or "UNKNOWN",
-                mode="refusal",
-                time_window=request.time_window or "n/a",
-                report_markdown=REFUSAL_MARKDOWN,
-                risk_score=0,
-                risk_level="n/a",
-            )
-            _send_json(self, 200, {"report_id": report_id, "status": "completed", "refused": True})
-            return
-        _start_job(report_id, request)
-        _send_json(self, 202, {"report_id": report_id, "status": "processing"})
+    events = normalize_alchemy_webhook(payload, SETTINGS.eth_large_transfer_threshold_eth)
+    for index, event in enumerate(events):
+        event_id = f"alchemy:{event.get('hash') or 'unknown'}:{event.get('amount')}:{index}"
+        STORAGE.save_onchain_event(event_id, "ETH", "alchemy_webhook", event)
 
-    def log_message(self, format: str, *args) -> None:
-        return
+    if events and SETTINGS.feishu_webhook_url:
+        background_tasks.add_task(send_feishu_text, SETTINGS, alchemy_ingest_summary(events))
+    return {
+        "status": "accepted",
+        "stored_events": len(events),
+        "json_archive": str(SETTINGS.onchain_events_json_path),
+    }
+
+
+@app.post("/api/research/report", status_code=202)
+async def create_report(request: ReportRequest, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    report_id = str(uuid.uuid4())
+    STORAGE.create_report(report_id, request.query)
+    if is_trading_advice_request(request.query):
+        STORAGE.complete_report(
+            report_id,
+            asset=request.asset or "UNKNOWN",
+            mode="refusal",
+            time_window=request.time_window or "n/a",
+            report_markdown=REFUSAL_MARKDOWN,
+            risk_score=0,
+            risk_level="n/a",
+        )
+        return {"report_id": report_id, "status": "completed", "refused": True}
+    background_tasks.add_task(_start_report_job, report_id, request)
+    return {"report_id": report_id, "status": "processing"}
+
+
+@app.get("/api/research/report/{report_id}")
+async def get_report(report_id: str):
+    report = STORAGE.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return report
+
+
+@app.get("/api/research/report/{report_id}/data")
+async def get_report_data(report_id: str) -> dict[str, Any]:
+    report = STORAGE.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return {
+        "report_id": report_id,
+        "snapshots": STORAGE.get_snapshots(report_id),
+        "normalized_signals": STORAGE.get_normalized_signals(report_id),
+        "api_call_logs": STORAGE.get_api_call_logs(report_id),
+    }
 
 
 def main() -> None:
-    _start_liquidation_collector()
-    server = ThreadingHTTPServer((SETTINGS.host, SETTINGS.port), Handler)
-    print(f"Crypto Research Agent backend running on http://{SETTINGS.host}:{SETTINGS.port}")
+    print(f"Crypto Research Agent FastAPI backend running on http://{SETTINGS.host}:{SETTINGS.port}")
     print(f"SQLite database: {SETTINGS.db_path}")
-    server.serve_forever()
+    print(f"On-chain JSON archive: {SETTINGS.onchain_events_json_path}")
+    uvicorn.run("backend.server:app", host=SETTINGS.host, port=SETTINGS.port, reload=False)
 
 
 if __name__ == "__main__":

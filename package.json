@@ -4,6 +4,9 @@
   "version": "0.0.1",
   "scripts": {
     "build": "npm --prefix frontend ci && npm --prefix frontend run build",
-    "dev": "npm --prefix frontend run dev"
+    "dev": "npm --prefix frontend run dev",
+    "worker:dev": "npx wrangler dev",
+    "worker:deploy": "npx wrangler deploy",
+    "worker:d1:migrate": "npx wrangler d1 migrations apply crypto_research_agent --remote"
   }
 }

@@ -67,15 +67,80 @@ produce buy, sell, hold, leverage, or guaranteed-return instructions.
 
 ## Alchemy Webhook
 
-Create an Alchemy Address Activity webhook and point it to:
+For fully-free cloud hosting, deploy the Alchemy webhook receiver as a
+Cloudflare Worker with D1 storage. This path does not require the local FastAPI
+backend or a terminal to stay open:
 
 ```text
-POST http://<your-public-backend-url>/api/webhooks/alchemy?secret=<ALCHEMY_WEBHOOK_SECRET>
+Alchemy Webhook
+→ Cloudflare Worker /api/webhooks/alchemy
+→ Cloudflare D1 onchain_events table
 ```
 
-For local development, expose the backend with a tunnel such as ngrok or Cloudflare Tunnel.
-The backend stores ETH transfers above `ETH_LARGE_TRANSFER_THRESHOLD_ETH` and includes them
-in later ETH research reports.
+The Worker endpoints are:
+
+```text
+GET  /health
+POST /api/webhooks/alchemy
+GET  /api/onchain/events?limit=50
+```
+
+Deploy flow:
+
+```bash
+npx wrangler login
+npx wrangler d1 create crypto_research_agent
+```
+
+Copy the returned `database_id` into `wrangler.jsonc`, replacing
+`REPLACE_WITH_D1_DATABASE_ID`, then run:
+
+```bash
+npx wrangler d1 migrations apply crypto_research_agent --remote
+npx wrangler secret put ALCHEMY_WEBHOOK_SECRET
+npx wrangler deploy
+```
+
+After deploy, point Alchemy to:
+
+```text
+https://<your-worker-name>.<your-workers-subdomain>.workers.dev/api/webhooks/alchemy?secret=<ALCHEMY_WEBHOOK_SECRET>
+```
+
+Recent stored events can be inspected with the same secret:
+
+```text
+https://<your-worker-name>.<your-workers-subdomain>.workers.dev/api/onchain/events?limit=50&secret=<ALCHEMY_WEBHOOK_SECRET>
+```
+
+The local FastAPI layer remains available for local research reports:
+
+```text
+Alchemy Webhook
+→ Cloudflare Tunnel public URL
+→ FastAPI backend /api/webhooks/alchemy
+→ local SQLite + JSONL storage
+→ report generator reads stored on-chain events
+```
+
+Create an Alchemy Address Activity webhook and point it to the public tunnel URL:
+
+```text
+POST https://<your-cloudflare-tunnel-url>/api/webhooks/alchemy?secret=<ALCHEMY_WEBHOOK_SECRET>
+```
+
+For local development with Cloudflare Tunnel:
+
+```bash
+python -m backend.server
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+
+Set `ALCHEMY_WEBHOOK_SECRET` in `.env` and use the same value in the Alchemy URL query,
+`X-Webhook-Secret`, or `Authorization: Bearer <secret>`. The backend stores ETH transfers
+above `ETH_LARGE_TRANSFER_THRESHOLD_ETH` in SQLite at `DB_PATH`, appends the same normalized
+events to `ONCHAIN_EVENTS_JSON_PATH`, and includes recent stored ETH events in later ETH
+research reports.
 
 ## Implemented Backend Behavior
 

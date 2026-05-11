@@ -5,6 +5,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/
+.DS_Store
+**/.DS_Store
+serve.pid
+.tools/
 
 # wrangler files
 .wrangler

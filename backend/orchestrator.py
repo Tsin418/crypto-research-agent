@@ -8,6 +8,7 @@ from backend.data_derivatives import fetch_derivatives
 from backend.data_market import fetch_market
 from backend.data_news import fetch_news
 from backend.data_onchain import fetch_onchain
+from backend.feishu import report_summary, send_feishu_text
 from backend.http_client import reset_current_report_id, set_api_call_recorder, set_current_report_id
 from backend.intent import parse_intent
 from backend.llm import DeepSeekClient
@@ -70,6 +71,16 @@ async def run_report_job(settings: Settings, storage: Storage, report_id: str, r
             report_markdown=markdown,
             risk_score=context.risk["risk_score"],
             risk_level=context.risk["risk_level"],
+        )
+        await send_feishu_text(
+            settings,
+            report_summary(
+                report_id,
+                context.intent.asset,
+                context.risk["risk_level"],
+                context.risk["risk_score"],
+                markdown,
+            ),
         )
     except Exception as exc:
         storage.fail_report(report_id, f"{type(exc).__name__}: {str(exc)}")

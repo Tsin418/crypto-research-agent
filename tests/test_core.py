@@ -8,6 +8,7 @@ from backend.models import Intent, LayerResult, ReportRequest, ResearchContext
 from backend.report import local_report, sanitize_report
 from backend.risk import compute_risk
 from backend.signals import extract_normalized_signals
+from backend.storage import Storage
 
 
 def test_heuristic_intent_eth_state_scan() -> None:
@@ -73,6 +74,20 @@ def test_alchemy_webhook_normalization_filters_large_eth_transfers() -> None:
     assert len(events) == 1
     assert events[0]["direction"] == "large_eth_transfer"
     assert events[0]["amount"] == 600
+
+
+def test_onchain_event_storage_writes_sqlite_and_json(tmp_path) -> None:
+    storage = Storage(tmp_path / "research.sqlite3", tmp_path / "onchain_events.jsonl")
+    storage.save_onchain_event(
+        "alchemy:0xlarge:600:0",
+        "ETH",
+        "alchemy_webhook",
+        {"hash": "0xlarge", "amount": 600, "direction": "large_eth_transfer"},
+    )
+
+    stored = storage.get_recent_onchain_events("ETH")
+    assert stored[0]["hash"] == "0xlarge"
+    assert "0xlarge" in (tmp_path / "onchain_events.jsonl").read_text(encoding="utf-8")
 
 
 def _sample_context(mode: str) -> ResearchContext:

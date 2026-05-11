@@ -11,9 +11,11 @@ from backend.utils import iso_now
 
 
 class Storage:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, onchain_events_json_path: Path | None = None):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.onchain_events_json_path = onchain_events_json_path or self.db_path.parent / "onchain_events.jsonl"
+        self.onchain_events_json_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._init_db()
 
@@ -191,6 +193,17 @@ class Storage:
             for row in rows
         }
 
+    def _append_onchain_event_json(self, event_id: str, asset: str, source: str, event: dict[str, Any]) -> None:
+        record = {
+            "id": event_id,
+            "asset": asset,
+            "source": source,
+            "event": event,
+            "created_at": iso_now(),
+        }
+        with self.onchain_events_json_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
     def save_onchain_event(self, event_id: str, asset: str, source: str, event: dict[str, Any]) -> None:
         with self._lock, self._connect() as conn:
             conn.execute(
@@ -214,6 +227,7 @@ class Storage:
                     iso_now(),
                 ),
             )
+            self._append_onchain_event_json(event_id, asset, source, event)
 
     def get_recent_onchain_events(self, asset: str, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as conn:

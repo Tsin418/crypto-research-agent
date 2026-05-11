@@ -54,6 +54,8 @@ class Settings:
     btc_txs_per_block_page_limit: int
     beaconchain_api_key: str
     bybit_liquidation_collector_enabled: bool
+    feishu_webhook_url: str
+    onchain_events_json_path: Path
     host: str
     port: int
     db_path: Path
@@ -65,6 +67,9 @@ def get_settings() -> Settings:
     db_path = Path(os.getenv("DB_PATH", "./data/research_agent.sqlite3"))
     if not db_path.is_absolute():
         db_path = ROOT_DIR / db_path
+    onchain_events_json_path = Path(os.getenv("ONCHAIN_EVENTS_JSON_PATH", "./data/onchain_events.jsonl"))
+    if not onchain_events_json_path.is_absolute():
+        onchain_events_json_path = ROOT_DIR / onchain_events_json_path
     watch_addresses = tuple(
         item.strip()
         for item in os.getenv("ETHERSCAN_WATCH_ADDRESSES", "").split(",")
@@ -88,6 +93,8 @@ def get_settings() -> Settings:
         btc_txs_per_block_page_limit=_int_env("BTC_TXS_PER_BLOCK_PAGE_LIMIT", 4),
         beaconchain_api_key=os.getenv("BEACONCHAIN_API_KEY", ""),
         bybit_liquidation_collector_enabled=_bool_env("BYBIT_LIQUIDATION_COLLECTOR_ENABLED", True),
+        feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
+        onchain_events_json_path=onchain_events_json_path,
         host=os.getenv("HOST", "127.0.0.1"),
         port=_int_env("PORT", 8000),
         db_path=db_path,
