@@ -1,0 +1,9 @@
+{
+  "name": "crypto-research-agent",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "build": "npm --prefix frontend ci && npm --prefix frontend run build",
+    "dev": "npm --prefix frontend run dev"
+  }
+}

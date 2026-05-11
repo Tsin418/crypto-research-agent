@@ -29,6 +29,25 @@ curl http://127.0.0.1:8000/api/research/report/<report_id>
 curl http://127.0.0.1:8000/api/research/report/<report_id>/data
 ```
 
+## Cloudflare Pages
+
+The repository root is configured as the Cloudflare project root. Use:
+
+```bash
+npm run build
+```
+
+Set the build output directory to:
+
+```text
+frontend/dist
+```
+
+The frontend calls the backend through `VITE_API_URL`. For production, set that
+Cloudflare Pages environment variable to the public URL where the Python backend
+is running. If it is not set, the frontend falls back to `http://127.0.0.1:8000`
+for local development.
+
 ## API Sources
 
 - DeepSeek: intent parsing and Markdown report generation.
