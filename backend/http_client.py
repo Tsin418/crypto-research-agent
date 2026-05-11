@@ -12,6 +12,13 @@ _api_call_recorder: ApiCallRecorder | None = None
 _current_report_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("current_report_id", default=None)
 
 
+def is_http_forbidden_error(error: str | None) -> bool:
+    if not error:
+        return False
+    lowered = error.lower()
+    return "403" in lowered and "forbidden" in lowered
+
+
 def set_api_call_recorder(recorder: ApiCallRecorder | None) -> None:
     global _api_call_recorder
     _api_call_recorder = recorder

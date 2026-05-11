@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 
 from backend.config import Settings
-from backend.http_client import get_json
+from backend.http_client import get_json, is_http_forbidden_error
 from backend.models import LayerResult
 from backend.utils import ASSET_META, ema, percent_change, round_float, safe_float
 
@@ -101,6 +101,38 @@ async def _bybit_klines(client: httpx.AsyncClient, asset: str) -> tuple[dict, li
         "ema_20": ema(closes_f, 20),
         "ema_50": ema(closes_f, 50),
         "ema_200": ema(closes_f, 200),
+        "technical_source": "bybit_public_klines",
+    }, []
+
+
+async def _coingecko_market_chart(client: httpx.AsyncClient, settings: Settings, asset: str) -> tuple[dict, list[str]]:
+    meta = ASSET_META[asset]
+    base_url = COINGECKO_PRO if settings.coingecko_plan.lower() == "pro" else COINGECKO_DEMO
+    header_name = "x-cg-pro-api-key" if settings.coingecko_plan.lower() == "pro" else "x-cg-demo-api-key"
+    headers = {header_name: settings.coingecko_api_key} if settings.coingecko_api_key else {}
+    data, error = await get_json(
+        client,
+        f"{base_url}/coins/{meta['coingecko_id']}/market_chart",
+        params={"vs_currency": "usd", "days": 220, "interval": "daily"},
+        headers=headers,
+        source="coingecko_market_chart",
+    )
+    if error or not isinstance(data, dict):
+        return {}, [error or "coingecko_market_chart: empty response"]
+
+    prices = [safe_float(row[1]) for row in data.get("prices", []) if isinstance(row, list) and len(row) >= 2]
+    volumes = [safe_float(row[1]) for row in data.get("total_volumes", []) if isinstance(row, list) and len(row) >= 2]
+    prices_f = [value for value in prices if value is not None]
+    volumes_f = [value for value in volumes[-7:] if value is not None]
+    avg_volume = sum(volumes_f) / len(volumes_f) if volumes_f else None
+    if not prices_f and avg_volume is None:
+        return {}, ["coingecko_market_chart: no usable price or volume rows"]
+    return {
+        "volume_7d_avg": round_float(avg_volume),
+        "ema_20": ema(prices_f, 20),
+        "ema_50": ema(prices_f, 50),
+        "ema_200": ema(prices_f, 200),
+        "technical_source": "coingecko_market_chart",
     }, []
 
 
@@ -125,6 +157,7 @@ async def _bybit_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dic
 
 
 async def fetch_market(settings: Settings, asset: str) -> LayerResult:
+    notes: list[str] = []
     async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
         primary, errors = await _coingecko(client, settings, asset)
         source = "coingecko"
@@ -133,18 +166,30 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
             errors.extend(fallback_errors)
             source = "coinpaprika" if primary else "unavailable"
         technicals, technical_errors = await _bybit_klines(client, asset)
-        errors.extend(technical_errors)
+        if technical_errors and all(is_http_forbidden_error(error) for error in technical_errors):
+            notes.append("Bybit public kline endpoints returned HTTP 403 in this runtime; using CoinGecko market chart for EMA and 7d volume.")
+            technicals, chart_errors = await _coingecko_market_chart(client, settings, asset)
+            errors.extend(chart_errors)
+        else:
+            errors.extend(technical_errors)
         bybit_spot, spot_errors = await _bybit_spot_ticker(client, asset)
-        errors.extend(spot_errors)
+        if spot_errors and all(is_http_forbidden_error(error) for error in spot_errors):
+            notes.append("Bybit spot ticker returned HTTP 403 in this runtime; using primary market volume where possible.")
+        else:
+            errors.extend(spot_errors)
 
     merged = {"asset": asset, **primary, **technicals, **bybit_spot}
-    turnover_24h = merged.get("spot_turnover_24h")
+    turnover_24h = merged.get("spot_turnover_24h") or merged.get("volume_24h")
     merged["volume_ratio_vs_7d"] = round_float(
         (turnover_24h / merged["volume_7d_avg"])
         if turnover_24h is not None and merged.get("volume_7d_avg")
         else None
     )
-    merged["volume_ratio_source"] = "bybit_spot_turnover_vs_bybit_7d_avg_turnover"
+    merged["volume_ratio_source"] = (
+        "bybit_spot_turnover_vs_bybit_7d_avg_turnover"
+        if merged.get("spot_turnover_24h") is not None
+        else "primary_market_volume_vs_technical_7d_avg_volume"
+    )
     price = merged.get("price_now")
     for period in (20, 50, 200):
         value = merged.get(f"ema_{period}")
@@ -162,6 +207,8 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
         merged.get("ema_20"),
         merged.get("ema_50"),
     )
-    if merged.get("volume_7d_avg") is None:
+    if notes:
+        merged["note"] = " ".join(notes)
+    elif merged.get("volume_7d_avg") is None:
         merged["note"] = "EMA/7d volume use Bybit public klines and may be unavailable if Bybit is blocked."
     return LayerResult(layer="market", source=source, data=merged, errors=errors)

@@ -5,7 +5,7 @@ import time
 import httpx
 
 from backend.config import Settings
-from backend.http_client import get_json
+from backend.http_client import get_json, is_http_forbidden_error
 from backend.data_options import fetch_deribit_put_call
 from backend.models import LayerResult
 from backend.utils import ASSET_META, iso_from_ms, percent_change, round_float, safe_float
@@ -37,6 +37,7 @@ def _signal(
 async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> LayerResult:
     symbol = ASSET_META[asset]["symbol"]
     errors: list[str] = []
+    bybit_errors: list[str] = []
     async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
         ticker_data, error = await get_json(
             client,
@@ -45,7 +46,7 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
             source="bybit_tickers",
         )
         if error:
-            errors.append(error)
+            bybit_errors.append(error)
         funding_data, error = await get_json(
             client,
             f"{BYBIT}/v5/market/funding/history",
@@ -53,7 +54,7 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
             source="bybit_funding_history",
         )
         if error:
-            errors.append(error)
+            bybit_errors.append(error)
         oi_data, error = await get_json(
             client,
             f"{BYBIT}/v5/market/open-interest",
@@ -61,16 +62,21 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
             source="bybit_open_interest",
         )
         if error:
-            errors.append(error)
+            bybit_errors.append(error)
         options_data, options_errors = await fetch_deribit_put_call(client, asset)
         errors.extend(options_errors)
+
+    bybit_blocked = bool(bybit_errors) and all(is_http_forbidden_error(error) for error in bybit_errors)
+    if bybit_errors and not bybit_blocked:
+        errors.extend(bybit_errors)
 
     ticker = {}
     if isinstance(ticker_data, dict) and ticker_data.get("retCode") == 0:
         rows = ticker_data.get("result", {}).get("list", [])
         ticker = rows[0] if rows else {}
     else:
-        errors.append("bybit_tickers: empty or non-OK response")
+        if not bybit_blocked:
+            errors.append("bybit_tickers: empty or non-OK response")
 
     funding_rows = []
     if isinstance(funding_data, dict) and funding_data.get("retCode") == 0:
@@ -118,7 +124,12 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
 
     data = {
         "asset": asset,
-        "source_note": "Bybit public V5 market endpoints; Binance is optional and currently not required.",
+        "source_note": (
+            "Bybit public V5 market endpoints returned HTTP 403 in this runtime; derivatives metrics fall back to Deribit options and locally collected liquidation data."
+            if bybit_blocked
+            else "Bybit public V5 market endpoints; Binance is optional and currently not required."
+        ),
+        "bybit_available": not bybit_blocked,
         "funding_rate_now": funding_now,
         "funding_rate_8h_ago": funding_8h_ago,
         "funding_rate_change": round_float(
@@ -139,4 +150,5 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
         "derivatives_signal": _signal(oi_change, price_change, funding_now, funding_8h_ago, long_liq, short_liq),
         "bybit_next_funding_time": iso_from_ms(ticker.get("nextFundingTime")),
     }
-    return LayerResult(layer="derivatives", source="bybit", data=data, errors=errors)
+    source = "deribit/local_liquidations" if bybit_blocked else "bybit/deribit"
+    return LayerResult(layer="derivatives", source=source, data=data, errors=errors)

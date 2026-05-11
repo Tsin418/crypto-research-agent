@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 from backend.attribution import build_attribution
 from backend.compliance import is_trading_advice_request
+from backend.config import get_settings
+from backend.data_derivatives import fetch_derivatives
+from backend.data_market import fetch_market
 from backend.data_onchain import normalize_alchemy_webhook
+from backend.http_client import is_http_forbidden_error
 from backend.intent import _heuristic_intent
 from backend.models import Intent, LayerResult, ReportRequest, ResearchContext
 from backend.report import local_report, sanitize_report
@@ -131,3 +137,57 @@ def test_bybit_liquidation_normalization() -> None:
     assert event["asset"] == "BTC"
     assert event["side"] == "long"
     assert event["notional"] == 40000
+
+
+def test_http_forbidden_error_detection() -> None:
+    assert is_http_forbidden_error("bybit_kline: HTTPStatusError: Client error '403 Forbidden'")
+    assert not is_http_forbidden_error("coingecko: HTTPStatusError: Client error '429 Too Many Requests'")
+
+
+def test_market_falls_back_when_bybit_is_forbidden(monkeypatch) -> None:
+    async def fake_get_json(*_, source: str, **__):
+        if source == "coingecko":
+            return [
+                {
+                    "current_price": 100,
+                    "price_change_percentage_1h_in_currency": 1,
+                    "price_change_percentage_24h_in_currency": 2,
+                    "price_change_percentage_7d_in_currency": 3,
+                    "total_volume": 700,
+                    "market_cap": 1000,
+                }
+            ], None
+        if source in {"bybit_kline", "bybit_spot_ticker"}:
+            return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
+        if source == "coingecko_market_chart":
+            return {
+                "prices": [[index, 100 + index] for index in range(220)],
+                "total_volumes": [[index, 700] for index in range(220)],
+            }, None
+        return None, f"{source}: unexpected call"
+
+    monkeypatch.setattr("backend.data_market.get_json", fake_get_json)
+    result = asyncio.run(fetch_market(get_settings(), "BTC"))
+
+    assert result.errors == []
+    assert result.data["technical_source"] == "coingecko_market_chart"
+    assert result.data["volume_ratio_vs_7d"] == 1
+    assert "Bybit public kline endpoints returned HTTP 403" in result.data["note"]
+
+
+def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
+    async def fake_get_json(*_, source: str, **__):
+        return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
+
+    async def fake_options(*_):
+        return {"put_call_ratio": 0.8, "put_call_volume_ratio": 0.9}, []
+
+    monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
+    monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
+
+    result = asyncio.run(fetch_derivatives(get_settings(), "BTC"))
+
+    assert result.errors == []
+    assert result.source == "deribit/local_liquidations"
+    assert result.data["bybit_available"] is False
+    assert "returned HTTP 403" in result.data["source_note"]
