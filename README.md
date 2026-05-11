@@ -1,3 +1,13 @@
+---
+title: Crypto Research Agent
+emoji: 📈
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Crypto Research Agent Backend
 
 Backend MVP for a BTC / ETH crypto research assistant. It collects market,
