@@ -80,6 +80,15 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "service": "Crypto Research Agent API",
+        "dashboard": "Open the Vite frontend URL, not the backend API root.",
+    }
+
+
 @app.post("/api/webhooks/alchemy", status_code=202)
 async def alchemy_webhook(
     request: Request,
