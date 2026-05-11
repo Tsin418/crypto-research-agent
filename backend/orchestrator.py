@@ -71,6 +71,13 @@ async def run_report_job(settings: Settings, storage: Storage, report_id: str, r
             report_markdown=markdown,
             risk_score=context.risk["risk_score"],
             risk_level=context.risk["risk_level"],
+            price_now=context.market.data.get("price_now"),
+            price_change_4h_pct=context.market.data.get("price_change_4h_pct"),
+            price_change_24h_pct=context.market.data.get("price_change_24h_pct"),
+            direction=context.market.data.get("direction"),
+            direction_label_zh=context.market.data.get("direction_label_zh"),
+            trigger_reason=context.market.data.get("trigger_reason"),
+            top_news=context.news.data.get("top_news"),
         )
         await send_feishu_text(
             settings,

@@ -105,6 +105,25 @@ class Storage:
                 );
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(reports)").fetchall()
+            }
+            report_columns = {
+                "price_now": "REAL",
+                "price_change_4h_pct": "REAL",
+                "price_change_24h_pct": "REAL",
+                "direction": "TEXT",
+                "direction_label_zh": "TEXT",
+                "trigger_reason": "TEXT",
+                "top_news_title": "TEXT",
+                "top_news_url": "TEXT",
+                "top_news_source": "TEXT",
+                "top_news_json": "TEXT",
+            }
+            for column, column_type in report_columns.items():
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE reports ADD COLUMN {column} {column_type}")
 
     def create_report(self, report_id: str, user_query: str) -> None:
         now = iso_now()
@@ -127,16 +146,46 @@ class Storage:
         report_markdown: str,
         risk_score: int,
         risk_level: str,
+        price_now: float | None = None,
+        price_change_4h_pct: float | None = None,
+        price_change_24h_pct: float | None = None,
+        direction: str | None = None,
+        direction_label_zh: str | None = None,
+        trigger_reason: str | None = None,
+        top_news: dict[str, Any] | None = None,
     ) -> None:
+        top_news = top_news or {}
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE reports
                 SET status='completed', asset=?, mode=?, time_window=?, report_markdown=?,
-                    risk_score=?, risk_level=?, updated_at=?
+                    risk_score=?, risk_level=?, price_now=?, price_change_4h_pct=?,
+                    price_change_24h_pct=?, direction=?, direction_label_zh=?,
+                    trigger_reason=?, top_news_title=?, top_news_url=?, top_news_source=?,
+                    top_news_json=?, updated_at=?
                 WHERE id=?
                 """,
-                (asset, mode, time_window, report_markdown, risk_score, risk_level, iso_now(), report_id),
+                (
+                    asset,
+                    mode,
+                    time_window,
+                    report_markdown,
+                    risk_score,
+                    risk_level,
+                    price_now,
+                    price_change_4h_pct,
+                    price_change_24h_pct,
+                    direction,
+                    direction_label_zh,
+                    trigger_reason,
+                    top_news.get("title"),
+                    top_news.get("url"),
+                    top_news.get("source"),
+                    json.dumps(top_news, ensure_ascii=False) if top_news else None,
+                    iso_now(),
+                    report_id,
+                ),
             )
 
     def fail_report(self, report_id: str, message: str) -> None:
@@ -163,6 +212,12 @@ class Storage:
             row = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
         if row is None:
             return None
+        top_news_json = None
+        if row["top_news_json"]:
+            try:
+                top_news_json = json.loads(row["top_news_json"])
+            except json.JSONDecodeError:
+                top_news_json = None
         return StoredReport(
             report_id=row["id"],
             status=row["status"],
@@ -173,10 +228,69 @@ class Storage:
             report_markdown=row["report_markdown"],
             risk_score=row["risk_score"],
             risk_level=row["risk_level"],
+            price_now=row["price_now"],
+            price_change_4h_pct=row["price_change_4h_pct"],
+            price_change_24h_pct=row["price_change_24h_pct"],
+            direction=row["direction"],
+            direction_label_zh=row["direction_label_zh"],
+            trigger_reason=row["trigger_reason"],
+            top_news_title=row["top_news_title"],
+            top_news_url=row["top_news_url"],
+            top_news_source=row["top_news_source"],
+            top_news_json=top_news_json,
             error_message=row["error_message"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def list_reports(self, asset: str | None = None, limit: int = 20) -> list[StoredReport]:
+        limit = max(1, min(limit, 100))
+        with self._connect() as conn:
+            if asset:
+                rows = conn.execute(
+                    """
+                    SELECT id FROM reports
+                    WHERE asset=? AND status='completed'
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (asset, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id FROM reports
+                    WHERE status='completed'
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [report for row in rows if (report := self.get_report(row["id"])) is not None]
+
+    def get_latest_report(self, asset: str, time_window: str | None = None) -> StoredReport | None:
+        with self._connect() as conn:
+            if time_window:
+                row = conn.execute(
+                    """
+                    SELECT id FROM reports
+                    WHERE asset=? AND time_window=? AND status='completed'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (asset, time_window),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT id FROM reports
+                    WHERE asset=? AND status='completed'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (asset,),
+                ).fetchone()
+        return self.get_report(row["id"]) if row else None
 
     def get_snapshots(self, report_id: str) -> dict[str, Any]:
         with self._connect() as conn:

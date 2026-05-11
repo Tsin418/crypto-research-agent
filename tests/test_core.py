@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 
 from backend.attribution import build_attribution
+from backend.auto_scan import _is_cache_fresh
 from backend.compliance import is_trading_advice_request
 from backend.config import get_settings
 from backend.data_derivatives import fetch_derivatives
-from backend.data_market import fetch_market
+from backend.data_market import classify_4h_direction, fetch_market
+from backend.data_news import dedupe_news_events, select_top_news_event
 from backend.data_onchain import normalize_alchemy_webhook
 from backend.http_client import is_http_forbidden_error
 from backend.intent import _heuristic_intent
@@ -191,3 +193,85 @@ def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
     assert result.source == "deribit/local_liquidations"
     assert result.data["bybit_available"] is False
     assert "returned HTTP 403" in result.data["source_note"]
+
+
+def test_4h_direction_classification() -> None:
+    rising = classify_4h_direction("BTC", 1.4, 1.0, -1.0)
+    falling = classify_4h_direction("ETH", -1.4, 1.0, -1.0)
+    neutral = classify_4h_direction("BTC", 0.3, 1.0, -1.0)
+
+    assert rising["direction"] == "rising"
+    assert rising["direction_label_zh"] == "上涨"
+    assert falling["direction"] == "falling"
+    assert falling["direction_label_zh"] == "下跌"
+    assert neutral["direction"] == "neutral"
+    assert neutral["direction_label_zh"] == "震荡"
+
+
+def test_report_cache_ttl_behavior(tmp_path) -> None:
+    storage = Storage(tmp_path / "research.sqlite3", tmp_path / "events.jsonl")
+    storage.create_report("fresh", "BTC 4h")
+    storage.complete_report(
+        "fresh",
+        asset="BTC",
+        mode="state_scan",
+        time_window="4h",
+        report_markdown="ok",
+        risk_score=1,
+        risk_level="low",
+    )
+
+    assert _is_cache_fresh(storage.get_latest_report("BTC", "4h"), ttl_minutes=15)
+    assert not _is_cache_fresh(storage.get_latest_report("BTC", "4h"), ttl_minutes=-1)
+
+
+def test_history_retrieval_with_auto_scan_fields(tmp_path) -> None:
+    storage = Storage(tmp_path / "research.sqlite3", tmp_path / "events.jsonl")
+    storage.create_report("btc-report", "BTC 4h")
+    storage.complete_report(
+        "btc-report",
+        asset="BTC",
+        mode="state_scan",
+        time_window="4h",
+        report_markdown="# BTC",
+        risk_score=2,
+        risk_level="low",
+        price_now=103000,
+        price_change_4h_pct=-1.4,
+        direction="falling",
+        direction_label_zh="下跌",
+        top_news={"title": "ETF flow changes", "url": "https://example.com", "source": "test"},
+    )
+
+    reports = storage.list_reports("BTC", limit=20)
+
+    assert len(reports) == 1
+    assert reports[0].asset == "BTC"
+    assert reports[0].price_change_4h_pct == -1.4
+    assert reports[0].top_news_json["title"] == "ETF flow changes"
+
+
+def test_news_dedup_output_shape() -> None:
+    events = [
+        {
+            "title": "Bitcoin ETF sees record inflow",
+            "url": "https://example.com/story?utm=1",
+            "source": "A",
+            "impact_level": "high",
+            "direction": "bullish",
+        },
+        {
+            "title": "Bitcoin ETF sees record inflow",
+            "url": "https://example.com/story?utm=2",
+            "source": "B",
+            "impact_level": "high",
+            "direction": "bullish",
+        },
+    ]
+
+    deduped = dedupe_news_events(events)
+    selected = asyncio.run(select_top_news_event(None, deduped, "BTC"))
+
+    assert len(deduped) == 1
+    assert set(selected) >= {"title", "url", "source", "related_assets", "impact_level", "direction", "reason_zh"}
+    assert selected["related_assets"] == ["BTC"]

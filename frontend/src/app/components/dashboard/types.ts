@@ -1,5 +1,5 @@
-export type AssetSelection = 'AUTO' | 'BTC' | 'ETH';
-export type TimeWindow = '24h' | '7d';
+export type AssetSelection = 'BTC' | 'ETH';
+export type TimeWindow = '4h' | '24h' | '7d';
 export type Direction = 'bullish' | 'bearish' | 'neutral' | string;
 
 export interface ReportRecord {
@@ -12,6 +12,16 @@ export interface ReportRecord {
   report_markdown: string | null;
   risk_score: number | null;
   risk_level: string | null;
+  price_now?: number | null;
+  price_change_4h_pct?: number | null;
+  price_change_24h_pct?: number | null;
+  direction?: string | null;
+  direction_label_zh?: string | null;
+  trigger_reason?: string | null;
+  top_news_title?: string | null;
+  top_news_url?: string | null;
+  top_news_source?: string | null;
+  top_news_json?: TopNewsEvent | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -59,9 +69,43 @@ export interface ResearchReport {
   error?: string;
 }
 
+export interface TopNewsEvent {
+  title?: string;
+  url?: string;
+  source?: string;
+  published_at?: string | null;
+  related_assets?: string[];
+  impact_level?: 'high' | 'medium' | 'low' | string;
+  direction?: 'bullish' | 'bearish' | 'neutral' | string;
+  reason_zh?: string;
+}
+
+export interface AutoScanReport {
+  report_id: string;
+  asset: AssetSelection;
+  price_now?: number | null;
+  price_change_4h_pct?: number | null;
+  price_change_24h_pct?: number | null;
+  direction?: 'rising' | 'falling' | 'neutral' | string | null;
+  direction_label_zh?: string | null;
+  trigger_reason?: string | null;
+  top_news?: TopNewsEvent | null;
+  report_markdown?: string;
+  dashboardData?: DashboardData;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AutoScanResponse {
+  generated_at: string;
+  cache_hit: boolean;
+  reports: AutoScanReport[];
+}
+
 export interface MarketData {
   price_now?: number;
   price_change_24h_pct?: number;
+  volume_24h?: number;
   volume_ratio_vs_7d?: number;
   market_signal?: string;
 }
@@ -93,6 +137,8 @@ export interface DerivativesData {
   funding_rate_now?: number;
   open_interest_change_24h_pct?: number;
   put_call_ratio?: number;
+  long_liquidations_24h?: number;
+  short_liquidations_24h?: number;
   liquidation_bias?: string;
   derivatives_signal?: string;
 }

@@ -35,6 +35,16 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     deepseek_api_key: str
@@ -60,6 +70,9 @@ class Settings:
     port: int
     db_path: Path
     http_timeout_seconds: int
+    price_4h_up_threshold_pct: float
+    price_4h_down_threshold_pct: float
+    report_cache_ttl_minutes: int
 
 
 def get_settings() -> Settings:
@@ -99,4 +112,7 @@ def get_settings() -> Settings:
         port=_int_env("PORT", 8000),
         db_path=db_path,
         http_timeout_seconds=_int_env("HTTP_TIMEOUT_SECONDS", 12),
+        price_4h_up_threshold_pct=_float_env("PRICE_4H_UP_THRESHOLD_PCT", 1.0),
+        price_4h_down_threshold_pct=_float_env("PRICE_4H_DOWN_THRESHOLD_PCT", -1.0),
+        report_cache_ttl_minutes=_int_env("REPORT_CACHE_TTL_MINUTES", 15),
     )

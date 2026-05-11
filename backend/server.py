@@ -11,12 +11,13 @@ import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.auto_scan import run_auto_scan, stored_report_payload
 from backend.compliance import REFUSAL_MARKDOWN, is_trading_advice_request
 from backend.config import get_settings
 from backend.data_onchain import normalize_alchemy_webhook
 from backend.feishu import alchemy_ingest_summary, send_feishu_text
 from backend.liquidations import run_bybit_liquidation_collector
-from backend.models import ReportRequest
+from backend.models import AutoScanRequest, ReportRequest
 from backend.orchestrator import run_report_job
 from backend.storage import Storage
 
@@ -129,6 +130,29 @@ async def create_report(request: ReportRequest, background_tasks: BackgroundTask
         return {"report_id": report_id, "status": "completed", "refused": True}
     background_tasks.add_task(_start_report_job, report_id, request)
     return {"report_id": report_id, "status": "processing"}
+
+
+@app.post("/api/research/auto-scan")
+async def auto_scan(request: AutoScanRequest) -> dict[str, Any]:
+    return await run_auto_scan(SETTINGS, STORAGE, request)
+
+
+@app.get("/api/research/reports")
+async def list_reports(asset: str | None = None, limit: int = 20) -> dict[str, Any]:
+    if asset is not None and asset not in {"BTC", "ETH"}:
+        raise HTTPException(status_code=400, detail="asset must be BTC or ETH")
+    reports = STORAGE.list_reports(asset, limit)
+    return {"reports": [report.model_dump() for report in reports]}
+
+
+@app.get("/api/research/latest")
+async def latest_report(asset: str = "BTC") -> dict[str, Any]:
+    if asset not in {"BTC", "ETH"}:
+        raise HTTPException(status_code=400, detail="asset must be BTC or ETH")
+    report = STORAGE.get_latest_report(asset, "4h") or STORAGE.get_latest_report(asset)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    return stored_report_payload(report)
 
 
 @app.get("/api/research/report/{report_id}")

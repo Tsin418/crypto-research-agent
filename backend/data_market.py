@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import httpx
 
 from backend.config import Settings
@@ -26,6 +28,33 @@ def _market_signal(price: float | None, chg24: float | None, ema20: float | None
     if ema20 is not None and ema50 is not None and price < ema20 < ema50:
         return "downtrend_pressure"
     return "neutral"
+
+
+def classify_4h_direction(
+    asset: str,
+    price_change_4h_pct: float | None,
+    up_threshold: float,
+    down_threshold: float,
+) -> dict:
+    if price_change_4h_pct is None:
+        return {
+            "direction": "neutral",
+            "direction_label_zh": "震荡",
+            "trigger_reason": f"{asset} 过去 4 小时价格变化数据不足，暂按震荡处理",
+        }
+    if price_change_4h_pct >= up_threshold:
+        direction = "rising"
+        label = "上涨"
+        reason = f"{asset} 过去 4 小时上涨 {price_change_4h_pct:.2f}%，超过 +{up_threshold:.1f}% 阈值"
+    elif price_change_4h_pct <= down_threshold:
+        direction = "falling"
+        label = "下跌"
+        reason = f"{asset} 过去 4 小时下跌 {abs(price_change_4h_pct):.2f}%，超过 {down_threshold:.1f}% 阈值"
+    else:
+        direction = "neutral"
+        label = "震荡"
+        reason = f"{asset} 过去 4 小时变化 {price_change_4h_pct:.2f}%，未超过方向阈值"
+    return {"direction": direction, "direction_label_zh": label, "trigger_reason": reason}
 
 
 async def _coingecko(client: httpx.AsyncClient, settings: Settings, asset: str) -> tuple[dict, list[str]]:
@@ -56,6 +85,94 @@ async def _coingecko(client: httpx.AsyncClient, settings: Settings, asset: str) 
         "volume_24h": safe_float(row.get("total_volume")),
         "market_cap": safe_float(row.get("market_cap")),
     }, []
+
+
+async def _bybit_4h_snapshot(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:
+    symbol = ASSET_META[asset]["symbol"]
+    data, error = await get_json(
+        client,
+        f"{BYBIT}/v5/market/kline",
+        params={"category": "spot", "symbol": symbol, "interval": "240", "limit": 2},
+        source="bybit_4h_kline",
+    )
+    if error or not isinstance(data, dict) or data.get("retCode") != 0:
+        return {}, [error or f"bybit_4h_kline: {data.get('retMsg') if isinstance(data, dict) else 'bad response'}"]
+    rows = data.get("result", {}).get("list", [])
+    if len(rows) < 2:
+        return {}, ["bybit_4h_kline: fewer than 2 rows"]
+    rows = sorted(rows, key=lambda item: int(item[0]))
+    price_4h_ago = safe_float(rows[-2][4])
+    current_price = safe_float(rows[-1][4])
+    return {
+        "price_now": current_price,
+        "price_4h_ago": price_4h_ago,
+        "price_change_4h_pct": percent_change(current_price, price_4h_ago),
+        "four_hour_source": "bybit_public_spot_kline",
+    }, []
+
+
+async def _coingecko_4h_snapshot(client: httpx.AsyncClient, settings: Settings, asset: str) -> tuple[dict, list[str]]:
+    meta = ASSET_META[asset]
+    base_url = COINGECKO_PRO if settings.coingecko_plan.lower() == "pro" else COINGECKO_DEMO
+    header_name = "x-cg-pro-api-key" if settings.coingecko_plan.lower() == "pro" else "x-cg-demo-api-key"
+    headers = {header_name: settings.coingecko_api_key} if settings.coingecko_api_key else {}
+    data, error = await get_json(
+        client,
+        f"{base_url}/coins/{meta['coingecko_id']}/market_chart",
+        params={"vs_currency": "usd", "days": 1},
+        headers=headers,
+        source="coingecko_4h_market_chart",
+    )
+    if error or not isinstance(data, dict):
+        return {}, [error or "coingecko_4h_market_chart: empty response"]
+    rows = [
+        (safe_float(row[0]), safe_float(row[1]))
+        for row in data.get("prices", [])
+        if isinstance(row, list) and len(row) >= 2
+    ]
+    rows = [(ts, price) for ts, price in rows if ts is not None and price is not None]
+    if len(rows) < 2:
+        return {}, ["coingecko_4h_market_chart: fewer than 2 usable rows"]
+    rows.sort(key=lambda item: item[0])
+    current_ts, current_price = rows[-1]
+    target_ts = current_ts - 4 * 60 * 60 * 1000
+    past_ts, price_4h_ago = min(rows, key=lambda item: abs(item[0] - target_ts))
+    sampled_at = datetime.fromtimestamp(current_ts / 1000, UTC).isoformat().replace("+00:00", "Z")
+    past_at = datetime.fromtimestamp(past_ts / 1000, UTC).isoformat().replace("+00:00", "Z")
+    return {
+        "price_now": current_price,
+        "price_4h_ago": price_4h_ago,
+        "price_change_4h_pct": percent_change(current_price, price_4h_ago),
+        "four_hour_source": "coingecko_market_chart_approx",
+        "four_hour_sampled_at": sampled_at,
+        "four_hour_past_sampled_at": past_at,
+    }, []
+
+
+async def fetch_4h_market_snapshot(settings: Settings, asset: str) -> LayerResult:
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+        snapshot, bybit_errors = await _bybit_4h_snapshot(client, asset)
+        source = "bybit"
+        if not snapshot:
+            errors.extend(bybit_errors)
+            snapshot, cg_errors = await _coingecko_4h_snapshot(client, settings, asset)
+            errors.extend(cg_errors)
+            source = "coingecko" if snapshot else "unavailable"
+        direction = classify_4h_direction(
+            asset,
+            snapshot.get("price_change_4h_pct"),
+            settings.price_4h_up_threshold_pct,
+            settings.price_4h_down_threshold_pct,
+        )
+    data = {
+        "asset": asset,
+        **snapshot,
+        **direction,
+        "up_threshold_pct": settings.price_4h_up_threshold_pct,
+        "down_threshold_pct": settings.price_4h_down_threshold_pct,
+    }
+    return LayerResult(layer="market_4h", source=source, data=data, errors=errors)
 
 
 async def _coinpaprika(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:

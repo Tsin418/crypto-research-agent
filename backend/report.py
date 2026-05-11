@@ -7,6 +7,8 @@ from backend.llm import DeepSeekClient
 from backend.models import DISCLAIMER, ResearchContext
 
 
+CHINESE_DISCLAIMER = "本报告仅用于研究和信息参考，不构成任何投资建议。"
+
 FORBIDDEN_PATTERNS = (
     r"\bbuy\b.*\bnow\b",
     r"\bsell\b.*\bimmediately\b",
@@ -22,6 +24,15 @@ def sanitize_report(markdown: str) -> str:
         sanitized = re.sub(pattern, "[removed: trading instruction]", sanitized, flags=re.IGNORECASE)
     if DISCLAIMER not in sanitized:
         sanitized = sanitized.rstrip() + f"\n\n## Disclaimer\n{DISCLAIMER}\n"
+    return sanitized
+
+
+def sanitize_chinese_report(markdown: str) -> str:
+    sanitized = markdown
+    for pattern in FORBIDDEN_PATTERNS + (r"买入", r"卖出", r"持有", r"加杠杆"):
+        sanitized = re.sub(pattern, "[已移除：交易建议]", sanitized, flags=re.IGNORECASE)
+    if CHINESE_DISCLAIMER not in sanitized:
+        sanitized = sanitized.rstrip() + f"\n\n## 风险提示\n{CHINESE_DISCLAIMER}\n"
     return sanitized
 
 
@@ -163,3 +174,90 @@ async def generate_report(context: ResearchContext, llm: DeepSeekClient) -> str:
     if not content:
         content = local_report(context)
     return sanitize_report(content)
+
+
+def local_chinese_auto_report(context: ResearchContext) -> str:
+    asset = context.intent.asset
+    market = context.market.data
+    derivatives = context.derivatives.data
+    news = context.news.data
+    onchain = context.onchain.data
+    top_news = news.get("top_news") or {}
+    direction_label = market.get("direction_label_zh") or "震荡"
+    change_4h = market.get("price_change_4h_pct")
+    change_text = f"{change_4h:.2f}%" if isinstance(change_4h, (int, float)) else "当前数据不足以确认"
+    lines = [
+        f"# {asset} 4小时市场异动分析",
+        "",
+        "## 一句话结论",
+        f"{asset} 当前自动判断为{direction_label}，4小时变化为 {change_text}。{market.get('trigger_reason') or '当前数据不足以确认。'}",
+        "",
+        "## 4小时市场表现",
+        f"- 当前价格：{market.get('price_now') or '当前数据不足以确认'}",
+        f"- 4小时变化：{change_text}",
+        f"- 24小时变化：{market.get('price_change_24h_pct') if market.get('price_change_24h_pct') is not None else '当前数据不足以确认'}",
+        f"- 成交量：{market.get('volume_24h') or market.get('spot_turnover_24h') or '当前数据不足以确认'}",
+        "",
+        "## 可能驱动因素",
+        (
+            f"价格在 4 小时内变化 {change_text}，24 小时变化为 "
+            f"{market.get('price_change_24h_pct') if market.get('price_change_24h_pct') is not None else '当前数据不足以确认'}。"
+            "需要结合新闻、衍生品和链上数据继续确认驱动因素。"
+        ),
+        "",
+        "## 新闻事件",
+        f"- 标题：{top_news.get('title') or '当前数据不足以确认'}",
+        f"- 来源：{top_news.get('source') or '当前数据不足以确认'}",
+        f"- 链接：{top_news.get('url') or '当前数据不足以确认'}",
+        f"- 影响判断：{top_news.get('reason_zh') or top_news.get('reason') or '当前数据不足以确认'}",
+        "",
+        "## 衍生品信号",
+        f"- Funding Rate：{derivatives.get('funding_rate_now') if derivatives.get('funding_rate_now') is not None else '当前数据不足以确认'}",
+        f"- Open Interest 24小时变化：{derivatives.get('open_interest_change_24h_pct') if derivatives.get('open_interest_change_24h_pct') is not None else '当前数据不足以确认'}",
+        f"- 24小时多头/空头清算：{derivatives.get('long_liquidations_24h')} / {derivatives.get('short_liquidations_24h')}",
+        "",
+        "## 链上信号",
+        onchain.get("onchain_signal") or "当前数据不足以确认。",
+        "",
+        "## 多空因素",
+        "### 偏多因素",
+        "- 当前数据不足以确认。" if not context.attribution.get("primary_drivers") else f"- {context.attribution['primary_drivers'][0].get('driver')}: {context.attribution['primary_drivers'][0].get('explanation')}",
+        "### 偏空因素",
+        f"- 新闻方向：{top_news.get('direction') or '当前数据不足以确认'}",
+        "",
+        "## 接下来观察",
+        "- 4小时价格变化是否继续超过阈值。",
+        "- Funding Rate、Open Interest 与清算结构是否同步变化。",
+        "- 核心新闻是否出现后续确认或反转。",
+        "",
+        "## 风险提示",
+        CHINESE_DISCLAIMER,
+    ]
+    return "\n".join(lines)
+
+
+async def generate_chinese_auto_report(context: ResearchContext, llm: DeepSeekClient) -> str:
+    system = (
+        "你是一名加密货币市场研究分析师。请基于给定 JSON 数据生成中文研究报告。\n"
+        "要求：\n"
+        "1. 只使用输入数据，不要编造数据。\n"
+        "2. 不要给出买入、卖出、持有、加杠杆等交易建议。\n"
+        "3. 不要使用英文标题，除非是 BTC、ETH、ETF、Funding Rate 等行业术语。\n"
+        "4. 报告面向个人研究使用，风格简洁、清晰、偏投研。\n"
+        "5. 如果数据不足，请明确说明“当前数据不足以确认”。\n"
+        "6. 必须包含风险提示。"
+    )
+    user = {
+        "required_format": (
+            "# BTC/ETH 4小时市场异动分析\n"
+            "## 一句话结论\n## 4小时市场表现\n## 可能驱动因素\n"
+            "## 新闻事件\n## 衍生品信号\n## 链上信号\n## 多空因素\n"
+            "### 偏多因素\n### 偏空因素\n## 接下来观察\n## 风险提示"
+        ),
+        "context": context.model_dump(),
+        "required_disclaimer": CHINESE_DISCLAIMER,
+    }
+    content = await llm.chat(system, json.dumps(user, ensure_ascii=False), temperature=0.2)
+    if not content:
+        content = local_chinese_auto_report(context)
+    return sanitize_chinese_report(content)
