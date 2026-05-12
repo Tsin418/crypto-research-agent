@@ -72,6 +72,7 @@ class Settings:
     http_timeout_seconds: int
     price_4h_up_threshold_pct: float
     price_4h_down_threshold_pct: float
+    market_scan_cache_ttl_minutes: int
     report_cache_ttl_minutes: int
 
 
@@ -114,5 +115,6 @@ def get_settings() -> Settings:
         http_timeout_seconds=_int_env("HTTP_TIMEOUT_SECONDS", 12),
         price_4h_up_threshold_pct=_float_env("PRICE_4H_UP_THRESHOLD_PCT", 1.0),
         price_4h_down_threshold_pct=_float_env("PRICE_4H_DOWN_THRESHOLD_PCT", -1.0),
+        market_scan_cache_ttl_minutes=_int_env("MARKET_SCAN_CACHE_TTL_MINUTES", 15),
         report_cache_ttl_minutes=_int_env("REPORT_CACHE_TTL_MINUTES", 15),
     )

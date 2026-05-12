@@ -102,6 +102,20 @@ export interface AutoScanResponse {
   reports: AutoScanReport[];
 }
 
+export interface MarketScanRecord {
+  asset: AssetSelection;
+  price_now: number | null;
+  price_change_4h_pct: number | null;
+  direction: 'rising' | 'falling' | 'neutral';
+  direction_label_zh: '上涨' | '下跌' | '震荡';
+  created_at: string;
+}
+
+export interface MarketScanResponse {
+  generated_at: string;
+  results: MarketScanRecord[];
+}
+
 export interface MarketData {
   price_now?: number;
   price_change_24h_pct?: number;
