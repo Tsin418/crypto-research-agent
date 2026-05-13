@@ -1,6 +1,0 @@
-{
-  "gatepay-merchant-discovery": {
-    "url": "http://dev.halftrust.xyz/pay-mcp-server/mcp",
-    "transport": "streamable-http"
-  }
-}
