@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -16,11 +16,7 @@ function figmaAssetResolver() {
   }
 }
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
-  const apiTarget = (env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
-
-  return {
+export default defineConfig({
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
@@ -44,7 +40,7 @@ export default defineConfig(({ mode }) => {
   server: {
     proxy: {
       '/api': {
-        target: apiTarget,
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },
@@ -52,5 +48,4 @@ export default defineConfig(({ mode }) => {
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
-  }
 })

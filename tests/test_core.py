@@ -7,7 +7,7 @@ from backend.auto_scan import _is_cache_fresh
 from backend.compliance import is_trading_advice_request
 from backend.config import get_settings
 from backend.data_derivatives import fetch_derivatives
-from backend.data_market import classify_4h_direction, fetch_4h_market_snapshot, fetch_market
+from backend.data_market import classify_4h_direction, fetch_market
 from backend.data_news import dedupe_news_events, select_top_news_event
 from backend.data_onchain import normalize_alchemy_webhook
 from backend.http_client import is_http_forbidden_error
@@ -177,29 +177,6 @@ def test_market_falls_back_when_bybit_is_forbidden(monkeypatch) -> None:
     assert "Bybit public kline endpoints returned HTTP 403" in result.data["note"]
 
 
-def test_4h_market_falls_back_when_bybit_is_forbidden(monkeypatch) -> None:
-    async def fake_get_json(*_, source: str, **__):
-        if source == "bybit_4h_kline":
-            return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
-        if source == "coingecko_4h_market_chart":
-            return {
-                "prices": [
-                    [0, 100],
-                    [4 * 60 * 60 * 1000, 104],
-                ],
-            }, None
-        return None, f"{source}: unexpected call"
-
-    monkeypatch.setattr("backend.data_market.get_json", fake_get_json)
-    result = asyncio.run(fetch_4h_market_snapshot(get_settings(), "BTC"))
-
-    assert result.errors == []
-    assert result.source == "coingecko"
-    assert result.data["price_change_4h_pct"] == 4
-    assert result.data["direction"] == "rising"
-    assert "Bybit public 4h kline endpoint returned HTTP 403" in result.data["note"]
-
-
 def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
     async def fake_get_json(*_, source: str, **__):
         return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
@@ -208,9 +185,6 @@ def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
         return {"put_call_ratio": 0.8, "put_call_volume_ratio": 0.9}, []
 
     monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
-    monkeypatch.setattr("backend.data_derivatives._coinalyze_derivatives", lambda *_: _async_result({}, []))
-    monkeypatch.setattr("backend.data_derivatives._deribit_perpetual", lambda *_: _async_result({}, []))
-    monkeypatch.setattr("backend.data_derivatives._hyperliquid_perpetual", lambda *_: _async_result({}, []))
     monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
 
     result = asyncio.run(fetch_derivatives(get_settings(), "BTC"))
@@ -218,53 +192,7 @@ def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
     assert result.errors == []
     assert result.source == "deribit/local_liquidations"
     assert result.data["bybit_available"] is False
-    assert "free fallbacks" in result.data["source_note"]
-
-
-async def _async_result(data, errors):
-    return data, errors
-
-
-def test_derivatives_prefers_coinalyze_when_available(monkeypatch) -> None:
-    async def fake_get_json(*_, source: str, **__):
-        if source.startswith("bybit_"):
-            return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
-        return None, f"{source}: unexpected call"
-
-    async def fake_coinalyze(*_):
-        return {
-            "derivatives_primary_source": "coinalyze_free_api",
-            "funding_rate_now": 0.0002,
-            "funding_rate_8h_ago": 0.0001,
-            "open_interest_now": 1000,
-            "open_interest_change_24h_pct": 6,
-            "long_liquidations_24h": 7_000_000,
-            "short_liquidations_24h": 2_000_000,
-        }, []
-
-    async def fake_deribit(*_):
-        return {"deribit_open_interest_now": 500, "deribit_perpetual_source": "deribit_public_api"}, []
-
-    async def fake_hyperliquid(*_):
-        return {"hyperliquid_open_interest_now": 600, "hyperliquid_perpetual_source": "hyperliquid_public_info_api"}, []
-
-    async def fake_options(*_):
-        return {}, []
-
-    monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
-    monkeypatch.setattr("backend.data_derivatives._coinalyze_derivatives", fake_coinalyze)
-    monkeypatch.setattr("backend.data_derivatives._deribit_perpetual", fake_deribit)
-    monkeypatch.setattr("backend.data_derivatives._hyperliquid_perpetual", fake_hyperliquid)
-    monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
-
-    result = asyncio.run(fetch_derivatives(get_settings(), "BTC"))
-
-    assert result.errors == []
-    assert result.source == "coinalyze/deribit/hyperliquid/local_liquidations"
-    assert result.data["funding_rate_now"] == 0.0002
-    assert result.data["open_interest_now"] == 1000
-    assert result.data["open_interest_change_24h_pct"] == 6
-    assert result.data["liquidation_bias"] == "long_flush"
+    assert "returned HTTP 403" in result.data["source_note"]
 
 
 def test_4h_direction_classification() -> None:

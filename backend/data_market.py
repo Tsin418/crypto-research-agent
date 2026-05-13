@@ -151,15 +151,11 @@ async def _coingecko_4h_snapshot(client: httpx.AsyncClient, settings: Settings, 
 
 async def fetch_4h_market_snapshot(settings: Settings, asset: str) -> LayerResult:
     errors: list[str] = []
-    notes: list[str] = []
     async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
         snapshot, bybit_errors = await _bybit_4h_snapshot(client, asset)
         source = "bybit"
         if not snapshot:
-            if bybit_errors and all(is_http_forbidden_error(error) for error in bybit_errors):
-                notes.append("Bybit public 4h kline endpoint returned HTTP 403 in this runtime; using CoinGecko market chart for the 4h snapshot.")
-            else:
-                errors.extend(bybit_errors)
+            errors.extend(bybit_errors)
             snapshot, cg_errors = await _coingecko_4h_snapshot(client, settings, asset)
             errors.extend(cg_errors)
             source = "coingecko" if snapshot else "unavailable"
@@ -176,8 +172,6 @@ async def fetch_4h_market_snapshot(settings: Settings, asset: str) -> LayerResul
         "up_threshold_pct": settings.price_4h_up_threshold_pct,
         "down_threshold_pct": settings.price_4h_down_threshold_pct,
     }
-    if notes:
-        data["note"] = " ".join(notes)
     return LayerResult(layer="market_4h", source=source, data=data, errors=errors)
 
 
