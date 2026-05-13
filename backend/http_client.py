@@ -83,6 +83,37 @@ async def get_json(
         _record_call(source, url, status_code, latency_ms, error_message)
 
 
+async def post_json(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    json: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    source: str,
+) -> tuple[dict[str, Any] | list[Any] | None, str | None]:
+    started = time.perf_counter()
+    status_code: int | None = None
+    headers = dict(headers) if headers else {}
+    if "user-agent" not in {k.lower() for k in headers.keys()}:
+        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        headers["Accept"] = "application/json"
+        headers["Accept-Language"] = "en-US,en;q=0.9"
+    try:
+        response = await client.post(url, json=json, headers=headers, follow_redirects=True)
+        status_code = response.status_code
+        response.raise_for_status()
+        return response.json(), None
+    except Exception as exc:
+        error = f"{source}: {type(exc).__name__}: {str(exc)[:180]}"
+        return None, error
+    finally:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        error_message = None
+        if status_code is None or (status_code and status_code >= 400):
+            error_message = f"HTTP status {status_code}" if status_code else "request failed"
+        _record_call(source, url, status_code, latency_ms, error_message)
+
+
 async def get_text(
     client: httpx.AsyncClient,
     url: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 from backend.attribution import build_attribution
 from backend.auto_scan import _is_cache_fresh
@@ -181,18 +182,140 @@ def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
     async def fake_get_json(*_, source: str, **__):
         return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
 
+    async def fake_deribit_perpetual(*_):
+        return {}, []
+
+    async def fake_hyperliquid(*_):
+        return {}, []
+
     async def fake_options(*_):
         return {"put_call_ratio": 0.8, "put_call_volume_ratio": 0.9}, []
 
     monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
+    monkeypatch.setattr("backend.data_derivatives._fetch_deribit_perpetual", fake_deribit_perpetual)
+    monkeypatch.setattr("backend.data_derivatives._fetch_hyperliquid_perpetual", fake_hyperliquid)
     monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
 
-    result = asyncio.run(fetch_derivatives(get_settings(), "BTC"))
+    result = asyncio.run(fetch_derivatives(replace(get_settings(), coinalyze_api_key=""), "BTC"))
 
     assert result.errors == []
-    assert result.source == "deribit/local_liquidations"
+    assert "deribit" in result.source
     assert result.data["bybit_available"] is False
+    assert result.data["coinalyze_available"] is False
+    assert result.data["deribit_perpetual_available"] is False
+    assert result.data["hyperliquid_available"] is False
     assert "returned HTTP 403" in result.data["source_note"]
+
+
+def test_derivatives_prefers_coinalyze_when_configured(monkeypatch) -> None:
+    async def fake_get_json(*_, source: str, **__):
+        if source == "coinalyze_future_markets":
+            return [
+                {
+                    "symbol": "BTCUSDT_PERP.OKX",
+                    "exchange": "OKX",
+                    "base_asset": "BTC",
+                    "quote_asset": "USDT",
+                    "market_type": "perpetual",
+                }
+            ], None
+        if source == "coinalyze_funding_rate":
+            return [{"symbol": "BTCUSDT_PERP.OKX", "value": 0.0003}], None
+        if source == "coinalyze_funding_history":
+            return [{"symbol": "BTCUSDT_PERP.OKX", "history": [{"t": 1, "c": 0.0001}, {"t": 2, "c": 0.0003}]}], None
+        if source == "coinalyze_open_interest":
+            return [{"symbol": "BTCUSDT_PERP.OKX", "value": 1000}], None
+        if source == "coinalyze_open_interest_history":
+            return [{"symbol": "BTCUSDT_PERP.OKX", "history": [{"t": 1, "c": 900}, {"t": 2, "c": 1000}]}], None
+        if source == "coinalyze_liquidation_history":
+            return [{"symbol": "BTCUSDT_PERP.OKX", "history": [{"t": 1, "l": 10, "s": 2}, {"t": 2, "l": 5, "s": 1}]}], None
+        if source == "bybit_tickers":
+            return {
+                "retCode": 0,
+                "result": {
+                    "list": [
+                        {
+                            "fundingRate": "0.001",
+                            "openInterestValue": "2000",
+                            "markPrice": "101",
+                            "indexPrice": "100",
+                            "price24hPcnt": "0.01",
+                        }
+                    ]
+                },
+            }, None
+        if source == "bybit_funding_history":
+            return {"retCode": 0, "result": {"list": [{"fundingRate": "0.001", "fundingRateTimestamp": "1"}, {"fundingRate": "0.001", "fundingRateTimestamp": "2"}]}}, None
+        if source == "bybit_open_interest":
+            return {"retCode": 0, "result": {"list": [{"openInterest": "1900", "timestamp": "1"}, {"openInterest": "2000", "timestamp": "2"}]}}, None
+        return {}, None
+
+    async def fake_deribit_perpetual(*_):
+        return {"funding_rate_now": 0.002, "open_interest_now": 3000, "basis_pct": 2.0}, []
+
+    async def fake_hyperliquid(*_):
+        return {"funding_rate_now": 0.003, "open_interest_now": 4000, "basis_pct": 3.0}, []
+
+    async def fake_options(*_):
+        return {"put_call_ratio": 0.8, "put_call_volume_ratio": 0.9}, []
+
+    settings = replace(get_settings(), coinalyze_api_key="test-key")
+    monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
+    monkeypatch.setattr("backend.data_derivatives._fetch_deribit_perpetual", fake_deribit_perpetual)
+    monkeypatch.setattr("backend.data_derivatives._fetch_hyperliquid_perpetual", fake_hyperliquid)
+    monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
+
+    result = asyncio.run(fetch_derivatives(settings, "BTC"))
+
+    assert result.errors == []
+    assert result.data["coinalyze_available"] is True
+    assert result.data["bybit_available"] is True
+    assert result.data["funding_rate_now"] == 0.0003
+    assert result.data["open_interest_now"] == 1000
+    assert result.data["open_interest_change_24h_pct"] == 11.11
+    assert result.data["long_liquidations_24h"] == 15
+    assert result.data["short_liquidations_24h"] == 3
+    assert result.data["liquidation_bias"] == "long_flush"
+
+
+def test_derivatives_uses_deribit_and_hyperliquid_fallbacks(monkeypatch) -> None:
+    async def fake_get_json(*_, source: str, **__):
+        return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
+
+    async def fake_deribit_perpetual(*_):
+        return {
+            "funding_rate_now": 0.0002,
+            "funding_rate_8h_ago": 0.0001,
+            "funding_rate_change": 0.0001,
+            "open_interest_now": 1200,
+            "basis_pct": 0.4,
+        }, []
+
+    async def fake_hyperliquid(*_):
+        return {
+            "funding_rate_now": 0.0005,
+            "open_interest_now": 2200,
+            "basis_pct": 0.7,
+        }, []
+
+    async def fake_options(*_):
+        return {"put_call_ratio": 1.1, "put_call_volume_ratio": 1.2}, []
+
+    monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
+    monkeypatch.setattr("backend.data_derivatives._fetch_deribit_perpetual", fake_deribit_perpetual)
+    monkeypatch.setattr("backend.data_derivatives._fetch_hyperliquid_perpetual", fake_hyperliquid)
+    monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
+
+    result = asyncio.run(fetch_derivatives(replace(get_settings(), coinalyze_api_key=""), "ETH"))
+
+    assert result.errors == []
+    assert result.data["bybit_available"] is False
+    assert result.data["deribit_perpetual_available"] is True
+    assert result.data["hyperliquid_available"] is True
+    assert result.data["funding_rate_now"] == 0.0002
+    assert result.data["open_interest_now"] == 1200
+    assert result.data["basis_pct"] == 0.4
+    assert result.data["hyperliquid_perpetual"]["open_interest_now"] == 2200
 
 
 def test_4h_direction_classification() -> None:
