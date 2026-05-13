@@ -51,6 +51,7 @@ class Settings:
     deepseek_model: str
     coingecko_api_key: str
     coingecko_plan: str
+    coinalyze_api_key: str
     bybit_api_key: str
     bybit_api_secret: str
     binance_api_key: str
@@ -94,6 +95,7 @@ def get_settings() -> Settings:
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
         coingecko_plan=os.getenv("COINGECKO_PLAN", "demo"),
+        coinalyze_api_key=os.getenv("COINALYZE_API_KEY", ""),
         bybit_api_key=os.getenv("BYBIT_API_KEY", ""),
         bybit_api_secret=os.getenv("BYBIT_API_SECRET", ""),
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),

@@ -19,6 +19,12 @@ cp .env.example .env
 python -m backend.server
 ```
 
+Optional market-data keys:
+
+- `COINALYZE_API_KEY`: enables the free Coinalyze derivatives fallback for
+  funding, open interest, and liquidation history.
+- Deribit and Hyperliquid public fallbacks do not require API keys.
+
 Verify the backend:
 
 ```bash

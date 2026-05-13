@@ -78,6 +78,9 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         **market.data,
         **{key: value for key, value in market_4h.data.items() if value is not None},
     }
+    notes = [note for note in (market.data.get("note"), market_4h.data.get("note")) if note]
+    if notes:
+        merged_market["note"] = " ".join(notes)
     market_layer = LayerResult(
         layer="market",
         source=f"{market_4h.source}/{market.source}",
