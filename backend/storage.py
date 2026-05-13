@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from backend.models import StoredReport
+from backend.models import MarketScanRecord, StoredReport
 from backend.utils import iso_now
 
 
@@ -103,6 +103,20 @@ class Storage:
                     raw_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS market_scans (
+                    id TEXT PRIMARY KEY,
+                    asset TEXT NOT NULL,
+                    price_now REAL,
+                    price_change_4h_pct REAL,
+                    direction TEXT NOT NULL,
+                    direction_label_zh TEXT NOT NULL,
+                    raw_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_market_scans_asset_created
+                    ON market_scans(asset, created_at DESC);
                 """
             )
             existing_columns = {
@@ -124,6 +138,88 @@ class Storage:
             for column, column_type in report_columns.items():
                 if column not in existing_columns:
                     conn.execute(f"ALTER TABLE reports ADD COLUMN {column} {column_type}")
+
+    @staticmethod
+    def _market_scan_from_row(row: sqlite3.Row) -> MarketScanRecord:
+        return MarketScanRecord(
+            asset=row["asset"],
+            price_now=row["price_now"],
+            price_change_4h_pct=row["price_change_4h_pct"],
+            direction=row["direction"],
+            direction_label_zh=row["direction_label_zh"],
+            created_at=row["created_at"],
+        )
+
+    def save_market_scan(
+        self,
+        *,
+        asset: str,
+        price_now: float | None,
+        price_change_4h_pct: float | None,
+        direction: str,
+        direction_label_zh: str,
+        raw_json: dict[str, Any] | None = None,
+    ) -> MarketScanRecord:
+        created_at = iso_now()
+        scan_id = f"market-scan:{asset}:{created_at}"
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO market_scans
+                (id, asset, price_now, price_change_4h_pct, direction,
+                 direction_label_zh, raw_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scan_id,
+                    asset,
+                    price_now,
+                    price_change_4h_pct,
+                    direction,
+                    direction_label_zh,
+                    json.dumps(raw_json or {}, ensure_ascii=False),
+                    created_at,
+                ),
+            )
+            row = conn.execute("SELECT * FROM market_scans WHERE id=?", (scan_id,)).fetchone()
+        return self._market_scan_from_row(row)
+
+    def get_latest_market_scan(self, asset: str) -> MarketScanRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM market_scans
+                WHERE asset=?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (asset,),
+            ).fetchone()
+        return self._market_scan_from_row(row) if row else None
+
+    def list_market_scans(self, asset: str | None = None, limit: int = 20) -> list[MarketScanRecord]:
+        limit = max(1, min(limit, 100))
+        with self._connect() as conn:
+            if asset:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM market_scans
+                    WHERE asset=?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (asset, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM market_scans
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [self._market_scan_from_row(row) for row in rows]
 
     def create_report(self, report_id: str, user_query: str) -> None:
         now = iso_now()

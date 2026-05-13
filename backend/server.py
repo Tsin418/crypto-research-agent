@@ -5,6 +5,7 @@ import hmac
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import uvicorn
@@ -14,12 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.auto_scan import run_auto_scan, stored_report_payload
 from backend.compliance import REFUSAL_MARKDOWN, is_trading_advice_request
 from backend.config import get_settings
+from backend.data_market import fetch_4h_market_snapshot
 from backend.data_onchain import normalize_alchemy_webhook
 from backend.feishu import alchemy_ingest_summary, send_feishu_text
 from backend.liquidations import run_bybit_liquidation_collector
-from backend.models import AutoScanRequest, ReportRequest
+from backend.models import AutoScanRequest, MarketScanRecord, MarketScanRequest, ReportRequest
 from backend.orchestrator import run_report_job
 from backend.storage import Storage
+from backend.utils import iso_now
 
 
 SETTINGS = get_settings()
@@ -58,6 +61,44 @@ def _start_liquidation_collector() -> None:
 
 async def _start_report_job(report_id: str, request: ReportRequest) -> None:
     await run_report_job(SETTINGS, STORAGE, report_id, request)
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _is_market_scan_cache_fresh(scan: MarketScanRecord | None) -> bool:
+    created_at = _parse_iso(scan.created_at if scan else None)
+    if created_at is None:
+        return False
+    ttl = timedelta(minutes=SETTINGS.market_scan_cache_ttl_minutes)
+    return datetime.now(UTC) - created_at <= ttl
+
+
+async def _get_or_create_market_scan(asset: str, force_refresh: bool) -> MarketScanRecord:
+    cached = STORAGE.get_latest_market_scan(asset)
+    if cached is not None and not force_refresh and _is_market_scan_cache_fresh(cached):
+        return cached
+
+    snapshot = await fetch_4h_market_snapshot(SETTINGS, asset)
+    data = snapshot.data
+    if data.get("price_now") is None or data.get("price_change_4h_pct") is None:
+        detail = "; ".join(snapshot.errors) or f"{asset} market data unavailable"
+        raise HTTPException(status_code=502, detail=detail)
+
+    return STORAGE.save_market_scan(
+        asset=asset,
+        price_now=data.get("price_now"),
+        price_change_4h_pct=data.get("price_change_4h_pct"),
+        direction=data.get("direction") or "neutral",
+        direction_label_zh=data.get("direction_label_zh") or "震荡",
+        raw_json={"source": snapshot.source, "data": data, "errors": snapshot.errors},
+    )
 
 
 @asynccontextmanager
@@ -144,6 +185,24 @@ async def create_report(request: ReportRequest, background_tasks: BackgroundTask
 @app.post("/api/research/auto-scan")
 async def auto_scan(request: AutoScanRequest) -> dict[str, Any]:
     return await run_auto_scan(SETTINGS, STORAGE, request)
+
+
+@app.post("/api/research/market-scan")
+async def market_scan(request: MarketScanRequest) -> dict[str, Any]:
+    assets = request.assets or ["BTC", "ETH"]
+    results = []
+    for asset in assets:
+        scan = await _get_or_create_market_scan(asset, request.force_refresh)
+        results.append(scan.model_dump())
+    return {"generated_at": iso_now(), "results": results}
+
+
+@app.get("/api/research/market-scans")
+async def list_market_scans(asset: str | None = None, limit: int = 20) -> dict[str, Any]:
+    if asset is not None and asset not in {"BTC", "ETH"}:
+        raise HTTPException(status_code=400, detail="asset must be BTC or ETH")
+    scans = STORAGE.list_market_scans(asset, limit)
+    return {"results": [scan.model_dump() for scan in scans]}
 
 
 @app.get("/api/research/reports")

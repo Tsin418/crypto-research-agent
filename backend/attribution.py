@@ -109,7 +109,7 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
     oi_change = derivatives.get("open_interest_change_24h_pct")
     if derivative_signal in {"leverage_flush", "sentiment_flip_bearish", "crowded_longs_under_pressure"} or long_liq or short_liq:
         score = 1.0
-        evidence = ["funding_rate", "open_interest", "bybit"]
+        evidence = ["funding_rate", "open_interest", "derivatives_sources"]
         if oi_change is not None and abs(oi_change) >= 5:
             score += 1.0
         if long_liq or short_liq:
@@ -121,7 +121,7 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
             _candidate(
                 "Derivatives leverage pressure",
                 evidence,
-                "Funding, open interest, and Bybit liquidation data indicate positioning stress rather than a purely spot-driven move.",
+                "Funding, open interest, and liquidation data indicate positioning stress rather than a purely spot-driven move.",
                 score,
                 min(0.9, 0.5 + score * 0.12),
             )

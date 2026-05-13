@@ -29,6 +29,20 @@ class AutoScanRequest(BaseModel):
     force_refresh: bool = False
 
 
+class MarketScanRequest(BaseModel):
+    assets: list[Asset] = Field(default_factory=lambda: ["BTC", "ETH"])
+    force_refresh: bool = False
+
+
+class MarketScanRecord(BaseModel):
+    asset: Asset
+    price_now: float | None = None
+    price_change_4h_pct: float | None = None
+    direction: Literal["rising", "falling", "neutral"]
+    direction_label_zh: Literal["上涨", "下跌", "震荡"]
+    created_at: str
+
+
 class Intent(BaseModel):
     asset: Asset
     mode: Mode

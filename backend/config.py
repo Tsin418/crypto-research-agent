@@ -51,6 +51,7 @@ class Settings:
     deepseek_model: str
     coingecko_api_key: str
     coingecko_plan: str
+    coinalyze_api_key: str
     bybit_api_key: str
     bybit_api_secret: str
     binance_api_key: str
@@ -72,6 +73,7 @@ class Settings:
     http_timeout_seconds: int
     price_4h_up_threshold_pct: float
     price_4h_down_threshold_pct: float
+    market_scan_cache_ttl_minutes: int
     report_cache_ttl_minutes: int
 
 
@@ -93,6 +95,7 @@ def get_settings() -> Settings:
         deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
         coingecko_plan=os.getenv("COINGECKO_PLAN", "demo"),
+        coinalyze_api_key=os.getenv("COINALYZE_API_KEY", ""),
         bybit_api_key=os.getenv("BYBIT_API_KEY", ""),
         bybit_api_secret=os.getenv("BYBIT_API_SECRET", ""),
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
@@ -114,5 +117,6 @@ def get_settings() -> Settings:
         http_timeout_seconds=_int_env("HTTP_TIMEOUT_SECONDS", 12),
         price_4h_up_threshold_pct=_float_env("PRICE_4H_UP_THRESHOLD_PCT", 1.0),
         price_4h_down_threshold_pct=_float_env("PRICE_4H_DOWN_THRESHOLD_PCT", -1.0),
+        market_scan_cache_ttl_minutes=_int_env("MARKET_SCAN_CACHE_TTL_MINUTES", 15),
         report_cache_ttl_minutes=_int_env("REPORT_CACHE_TTL_MINUTES", 15),
     )
