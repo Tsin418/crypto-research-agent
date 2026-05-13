@@ -1,0 +1,629 @@
+{
+  "version": 1,
+  "skills": {
+    "authenticate-wallet": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/authenticate-wallet/SKILL.md",
+      "computedHash": "ec56468a4d92a86450299cdf64ad4b1ad4b40fd988f3038244a95a35bd4e22de"
+    },
+    "binance": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance/binance/SKILL.md",
+      "computedHash": "05df646950f9f44e8284e34e02d465185ce7d6f9ea4fa90a599af6d24428f81c"
+    },
+    "binance-agentic-wallet": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/binance-agentic-wallet/SKILL.md",
+      "computedHash": "136f862d0c9a8f99af892596087cf259f1571b1fb160b2b394ee4c37b5cc44b4"
+    },
+    "binance-tokenized-securities-info": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/binance-tokenized-securities-info/SKILL.md",
+      "computedHash": "a23dc838e5c8aa7841a89cf3531404d98433bf7b57888d7c2238e0eb30d5e743"
+    },
+    "bybit-trading": {
+      "source": "bybit-exchange/skills",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "c8daad0562c40738510aa0b35c7194820ec58f195df2ca651f89dbf2182122f8"
+    },
+    "crypto-market-rank": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/crypto-market-rank/SKILL.md",
+      "computedHash": "0d3428cfe4386dbc8e9498629e2a3dc1b0244e603cac6a439ea8b2f82df7af74"
+    },
+    "fiat": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance/fiat/SKILL.md",
+      "computedHash": "75267c94e99203536837d229799c8041f7da4df27536469220d8c5cac7a137a6"
+    },
+    "fund": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/fund/SKILL.md",
+      "computedHash": "768de63f7dea195c12afbeed7190c08c67d53487732628f0ca1d761a0eab04e1"
+    },
+    "gate-cli-installer": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-cli-installer/SKILL.md",
+      "computedHash": "c5205def18258fd878288b5f6e828bddd7f0a079dc898202ab43d78779d63410"
+    },
+    "gate-dex-market": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-dex-market/SKILL.md",
+      "computedHash": "4c7203782ce6e507f8bab792660be6c7e161122a48d536dbcc6613a4235dc5c2"
+    },
+    "gate-dex-market-cli": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-dex-market-cli/SKILL.md",
+      "computedHash": "f5060fab759650cc33ead323f47e66649f15348e52f74f28ff60ba89e99447f1"
+    },
+    "gate-dex-trade": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-dex-trade/SKILL.md",
+      "computedHash": "b7a56e21da7039d1a361db953fd849aede6aa83007d1f0aaefb68d2cacd36309"
+    },
+    "gate-dex-trade-cli": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-dex-trade-cli/SKILL.md",
+      "computedHash": "8c54b4312af198c3ff9dc7d932fbb8e9db952b25c2f4126523eb4ad04634966f"
+    },
+    "gate-dex-wallet": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-dex-wallet/SKILL.md",
+      "computedHash": "244eb4dadc829a486870492c7f349aa56f8e09f05dadf3092ff88afebe137676"
+    },
+    "gate-dex-wallet-cli": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-dex-wallet-cli/SKILL.md",
+      "computedHash": "6e20cdb073cd248df03a609060e7be92e77b9c91eab9f61d662dcf3783b67672"
+    },
+    "gate-exchange-activitycenter": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-activitycenter/SKILL.md",
+      "computedHash": "5f1e43cb4999762172471a6e121c98d5470bf0ec041c6e7cb688808890dc841d"
+    },
+    "gate-exchange-affiliate": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-affiliate/SKILL.md",
+      "computedHash": "49879cf02b4d0c3e24d561f90ce6b24ae7f5aee8c7ba65cc5805a547cbe816e1"
+    },
+    "gate-exchange-alpha": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-alpha/SKILL.md",
+      "computedHash": "deae6295cfd0fd2127755e81d557ed2e9a0d9eff6a59569c2ece041bdb007c21"
+    },
+    "gate-exchange-assets": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-assets/SKILL.md",
+      "computedHash": "f56947750a8cc7c0f997977ef0d59e86506fb43a6155e4a713faa1f4f2b17038"
+    },
+    "gate-exchange-assets-manager": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-assets-manager/SKILL.md",
+      "computedHash": "93babd171c54b74b037dae92c6fd0e2fb4903f9dc91338525fef171f05407802"
+    },
+    "gate-exchange-assetswap": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-assetswap/SKILL.md",
+      "computedHash": "2d7a845301322a2655b5d95f71e497bd526f151ad4e60dbc7e56dec37a59da06"
+    },
+    "gate-exchange-autoinvest": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-autoinvest/SKILL.md",
+      "computedHash": "7efb0bbd6adb4c33a0c9255dde9b524f31278b26b83dd47af5be2c81309a1c6d"
+    },
+    "gate-exchange-bot": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-bot/SKILL.md",
+      "computedHash": "1d74accab62f0a1f11be7ffe873c1b79137cf972e5abe5c8015ec93227a60b5d"
+    },
+    "gate-exchange-candydrop": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-candydrop/SKILL.md",
+      "computedHash": "848d9bdf5af7a67d7695d2b8b4d8e86e384864751bf856c3b7f9344532fa1a22"
+    },
+    "gate-exchange-collateralloan": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-collateralloan/SKILL.md",
+      "computedHash": "020c5e9536cf213784320e5d1106a366c74d71f74fef933bd88f933e0b7f621e"
+    },
+    "gate-exchange-coupon": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-coupon/SKILL.md",
+      "computedHash": "0bd237f0ebe3f4e4f58661e96a61949c4ed55dc3471f88fa8a04c1d75880908e"
+    },
+    "gate-exchange-crossex": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-crossex/SKILL.md",
+      "computedHash": "eaf0795114c74a74cb2cec52443c08e6a721dd812d2939b66f492afec946b205"
+    },
+    "gate-exchange-dual": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-dual/SKILL.md",
+      "computedHash": "d453acb0dd691cf86147b80bde129ede818243c721235b22aa1de0e73d63f2b9"
+    },
+    "gate-exchange-earn": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-earn/SKILL.md",
+      "computedHash": "09fdc5c3d2f151cd73a10937cc2f8ec25f03319db82cabbd9454f44bf9696fba"
+    },
+    "gate-exchange-flashswap": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-flashswap/SKILL.md",
+      "computedHash": "9b24ed4fd9fc8030c8156efb47d4f53fe263687f14a5eab6fdc3433bfab0987d"
+    },
+    "gate-exchange-flashswap-assistant": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-flashswap-assistant/SKILL.md",
+      "computedHash": "51d927e2beb72e50a3c809c029734da71874dbb37871eaf45ddac8da1493bfeb"
+    },
+    "gate-exchange-futures": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-futures/SKILL.md",
+      "computedHash": "878ca9aee7f0a55697e3f5d05e9309634833af02085cb1bbf54e62004f0ef04f"
+    },
+    "gate-exchange-kyc": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-kyc/SKILL.md",
+      "computedHash": "99c16c0799f732ca69fa6948a9d2d40a6d0b8f09b194c4fb1fda100fb8a9bbb8"
+    },
+    "gate-exchange-launchpool": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-launchpool/SKILL.md",
+      "computedHash": "037a051bf57bc3b5a1ff134e085de3c7ba14e6cf6da8978c221cee0ee2027cf2"
+    },
+    "gate-exchange-marketanalysis": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-marketanalysis/SKILL.md",
+      "computedHash": "f82fd9f777db50468fe581e0b51a1e43e07cfff1f0cb5c98b4d00b60dabacad5"
+    },
+    "gate-exchange-newcoin": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-newcoin/SKILL.md",
+      "computedHash": "6cf541535407d437c96193a479521c03e4fde26bea99b9ad00b9464b80b62b29"
+    },
+    "gate-exchange-options": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-options/SKILL.md",
+      "computedHash": "09e203e0458b3dd8677ceb651d21e04376700befb9691124a81d4a9695a2f966"
+    },
+    "gate-exchange-pay": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-pay/SKILL.md",
+      "computedHash": "bbe28fc5562163d1b0c23b3dc53002ee324651277da14463afe4a831b60801e4"
+    },
+    "gate-exchange-referral": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-referral/SKILL.md",
+      "computedHash": "5d827ab3b28aebbd3e70c90a33827d65c2b74352734c131232df461e15bc1ecc"
+    },
+    "gate-exchange-simpleearn": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-simpleearn/SKILL.md",
+      "computedHash": "903a00d2b1423af22995456bc15418407d9f957a52f32783d9d2d93ded46fe9c"
+    },
+    "gate-exchange-smallbalance": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-smallbalance/SKILL.md",
+      "computedHash": "2f9e51d33bfa0ea070c2ab8c99e2b6ffa5e4dff51135cf173a0db2a93b9c6294"
+    },
+    "gate-exchange-spot": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-spot/SKILL.md",
+      "computedHash": "9782b7105c48c99f2371bd427a70f3224c75344ba8c8f3edd8ac2c9a661ca152"
+    },
+    "gate-exchange-staking": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-staking/SKILL.md",
+      "computedHash": "777c1b4c2507b897f4a2da069cbc5ab182c93b944a331c10e859e826ff96488a"
+    },
+    "gate-exchange-subaccount": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-subaccount/SKILL.md",
+      "computedHash": "51b64360c8343af75181fe830630410b1fe596836789bf4b8628cbdb63b478fa"
+    },
+    "gate-exchange-tradfi": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-tradfi/SKILL.md",
+      "computedHash": "99250487336600a7bbdbef6855919d4fc4c2ef162b038c5e1a79b26e0c5f3b69"
+    },
+    "gate-exchange-trading": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-trading/SKILL.md",
+      "computedHash": "454b431ad2b33523feff627eed79f821a924ce9252f4493e9bb6d14e0f5f2648"
+    },
+    "gate-exchange-transfer": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-transfer/SKILL.md",
+      "computedHash": "05337438e7e2a725d46763b6a198231d0c4ac2de7a2d29f20e26aed01d6301a8"
+    },
+    "gate-exchange-unified": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-unified/SKILL.md",
+      "computedHash": "bc6cc0cf42103f949d09a73a42d57c0454662d5b538209eb0b0bd97f15bcc81b"
+    },
+    "gate-exchange-vipfee": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-vipfee/SKILL.md",
+      "computedHash": "db08c8c1b72ac39c4f5de1ca7d882af2621d259ea3d6d488cc8a1c6298e21674"
+    },
+    "gate-exchange-welfare": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-exchange-welfare/SKILL.md",
+      "computedHash": "edaa2c76da4d2879499bc717e58c4b8eb7a09117dad708bffc37d95c36a4f8a0"
+    },
+    "gate-info-addresstracker": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-addresstracker/SKILL.md",
+      "computedHash": "1b2a3772cf2403bfddfef1c3acaeb928e9e092adc4bb2c8569748163503f0819"
+    },
+    "gate-info-coinanalysis": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-coinanalysis/SKILL.md",
+      "computedHash": "4e8abed3ad12a59ee59878c24f07c480c001c23a46215e2ed8a87036812b1302"
+    },
+    "gate-info-coincompare": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-coincompare/SKILL.md",
+      "computedHash": "fac0d209d505552f79d262dbaee785cb6813dd8a60aa0f5068f65fdaeb456079"
+    },
+    "gate-info-defianalysis": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-defianalysis/SKILL.md",
+      "computedHash": "f622924d55132f8733741b767c685ea14d976dc8979be7b12efba3008072e764"
+    },
+    "gate-info-liveroomlocation": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-liveroomlocation/SKILL.md",
+      "computedHash": "84822306edf0bfa9247c65f89dc9b0c885d12438199778e005f8ca6c57ac8f7e"
+    },
+    "gate-info-macroimpact": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-macroimpact/SKILL.md",
+      "computedHash": "8d6a549d0d15c0a03eec4fab0797dcf840e31095c9d74f44d9a448f631668e4c"
+    },
+    "gate-info-marketoverview": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-marketoverview/SKILL.md",
+      "computedHash": "a6fa0c383c530f6f2b23544859a63aaa8d5b7a85194d59d11b8fc2a368bab764"
+    },
+    "gate-info-research": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-research/SKILL.md",
+      "computedHash": "077f92f0036a17d71b64fdb9b88a4717fb6de977bc4d6d1195554c547a72adc0"
+    },
+    "gate-info-risk": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-risk/SKILL.md",
+      "computedHash": "d53b1aa60f896ab5527bf2f32eb422e2343fc63b58d3b357e2da5d6a04f034e4"
+    },
+    "gate-info-riskcheck": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-riskcheck/SKILL.md",
+      "computedHash": "d0458814fe8846b1a513fa0fa0428e6f3e023a108609a6e80ab85a50057689ea"
+    },
+    "gate-info-tokenonchain": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-tokenonchain/SKILL.md",
+      "computedHash": "ec7dac25569d0f5faf80a2dd21ff4e0a93842d336b0b4df03649d576ba152e75"
+    },
+    "gate-info-trendanalysis": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-trendanalysis/SKILL.md",
+      "computedHash": "ad87bce0b5c9a957352a1152dcdc2613ed1102b0225ea3f806eb59620c7c2e6a"
+    },
+    "gate-info-web3": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-info-web3/SKILL.md",
+      "computedHash": "733e2a78480178d784205692ccc6c7a674daeae0f70b6aa91e9238fa78eb83d2"
+    },
+    "gate-mcp-installer": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-mcp-installer/SKILL.md",
+      "computedHash": "adff38dceb63fc8416a9cebf5436b97eda80a16ad0015e143950ea33a927cd49"
+    },
+    "gate-news-briefing": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-news-briefing/SKILL.md",
+      "computedHash": "3c9a1049bad1012ec2e86400587ac615a0f40ef6f52cc9fa9a35c00a7c188854"
+    },
+    "gate-news-communityscan": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-news-communityscan/SKILL.md",
+      "computedHash": "3a8ce0ec429a85109d9a0d90ff02095c5750973a1c1c3e7ced1b9bd532226141"
+    },
+    "gate-news-eventexplain": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-news-eventexplain/SKILL.md",
+      "computedHash": "6f6d594e47532a72c87db9885ba21e67c1533611df108b07d2b5fb73b2af18da"
+    },
+    "gate-news-intel": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-news-intel/SKILL.md",
+      "computedHash": "cb8784cd754efb13bed234d573f806d783c6b1bd2168f0e19914dcd7a81bda43"
+    },
+    "gate-news-listing": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-news-listing/SKILL.md",
+      "computedHash": "f58a668822e183c010104d35453fc25b1af1c3ee41868f2d30f8ba70e6b143d1"
+    },
+    "gate-pay-x402": {
+      "source": "gate/gate-skills",
+      "sourceType": "github",
+      "skillPath": "skills/gate-pay-x402/SKILL.md",
+      "computedHash": "fea7f29cffda9e20f903ca9778f991189f7491a3473abf5e7ae7c1f0dbaa795a"
+    },
+    "meme-rush": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/meme-rush/SKILL.md",
+      "computedHash": "ec36bf098d049e63614c6224b7e14455ca813872ebbec2306114b72a692de865"
+    },
+    "monetize-service": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/monetize-service/SKILL.md",
+      "computedHash": "66fbe03f3a451d2926d8a784f550c4e8370f981e3a3053e9fa8fbb0c59f8d720"
+    },
+    "okx-a2a-payment": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-a2a-payment/SKILL.md",
+      "computedHash": "b3b483993604fcc222a4c3a4f7c344c402008f22de21118c4bee157d271fe969"
+    },
+    "okx-agentic-wallet": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-agentic-wallet/SKILL.md",
+      "computedHash": "ac544f107c597d80cc7ce55bf50a68bc633be3463e85a36b1c207fa3aa0880d5"
+    },
+    "okx-audit-log": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-audit-log/SKILL.md",
+      "computedHash": "90cbefdcffce01fe5a6b209d1a7c48f58f51031582219bb5826c1ab041f88158"
+    },
+    "okx-dapp-discovery": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dapp-discovery/SKILL.md",
+      "computedHash": "0a3ae4e6e0b4a13ceb2a7994c961f571f4f0013e2ae30805abced2d75b16c36d"
+    },
+    "okx-defi-invest": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-defi-invest/SKILL.md",
+      "computedHash": "87bbd455836204a879e5e86223e4546875ec5515802952cea34a66afc0d60ab4"
+    },
+    "okx-defi-portfolio": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-defi-portfolio/SKILL.md",
+      "computedHash": "0ffba411ad91ccf0a0f50e30ac2b4eb3b93d7a3b8e2011ed8aa4ee8332a3fcb9"
+    },
+    "okx-dex-bridge": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-bridge/SKILL.md",
+      "computedHash": "fbe5b20bb591667c2c2c558ee603075a71961d91d7769a04edb0757c0e4cf48b"
+    },
+    "okx-dex-market": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-market/SKILL.md",
+      "computedHash": "aea729edadb148b2dece942e72c65d1fb54a10a1e43fc1047ff90a10efeff403"
+    },
+    "okx-dex-signal": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-signal/SKILL.md",
+      "computedHash": "e8fa72593bc291dfea2749247cb0aeee0b39f6458b9c06f7d0742f24277cdd70"
+    },
+    "okx-dex-swap": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-swap/SKILL.md",
+      "computedHash": "bd5be19fc49e4d9a4f885f19fb4138022684518c0748785b16e8271f1f26e350"
+    },
+    "okx-dex-token": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-token/SKILL.md",
+      "computedHash": "94df8ddaf1f60769e437793baaac490d6ad603f1b0716f831a20605ea49e3dae"
+    },
+    "okx-dex-trenches": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-trenches/SKILL.md",
+      "computedHash": "4d7b2bb4b442e1fda521834b3e85e23a7fb279a20ca4228cd7b16e93398b6742"
+    },
+    "okx-dex-ws": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-dex-ws/SKILL.md",
+      "computedHash": "d76a7bd5805e48d3365c3b51118ca3bd2001426fda71acd733273144d8245a26"
+    },
+    "okx-growth-competition": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-growth-competition/SKILL.md",
+      "computedHash": "b54cef9e6c16d2f05a661ffd9352fa010e3988074a1a17708786c1a760c2edb8"
+    },
+    "okx-onchain-gateway": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-onchain-gateway/SKILL.md",
+      "computedHash": "cb1a3ed9ea60de510e1eaa34fc68abb1a0817c9a6f750de416d47000f57d52e7"
+    },
+    "okx-security": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-security/SKILL.md",
+      "computedHash": "c88db1741a46b0b680973b43811d99d47e48ab54c6f8ef6b965ad8a8bab89376"
+    },
+    "okx-wallet-portfolio": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-wallet-portfolio/SKILL.md",
+      "computedHash": "846779430e2cec39c7ca4c91ecd65b738fd0e78eeb225091455a93f42923711d"
+    },
+    "okx-x402-payment": {
+      "source": "okx/onchainos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/okx-x402-payment/SKILL.md",
+      "computedHash": "b8774527c741d1164acd70e40b129b8fb7068f4127ae361bdafaac911534a005"
+    },
+    "onchain-pay-open-api": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance/onchain-pay/SKILL.md",
+      "computedHash": "81216938a2551cfec7ce9665c7b609d31715f6e2d56c40587a1eb5a36b4ca5d3"
+    },
+    "p2p": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance/p2p/SKILL.md",
+      "computedHash": "9eec3205a93629aeb57023e776a7063864167fcd844a9c064e3dd00ebf59b50a"
+    },
+    "pay-for-service": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/pay-for-service/SKILL.md",
+      "computedHash": "bf605a91e70ea9f90dbcb777ee5a1df02e245fb14fc854abb51b8455906cbb9a"
+    },
+    "payment-assistant": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance/payment/SKILL.md",
+      "computedHash": "8863997374d2b1987a1cce47a8a66a229470a74d03d7e37d8ac2f6e61f175471"
+    },
+    "query-address-info": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/query-address-info/SKILL.md",
+      "computedHash": "cddc06f4359fb83c3d54c4d6f5c96cad1f3a51c840305595e65b67fd48db117c"
+    },
+    "query-onchain-data": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/query-onchain-data/SKILL.md",
+      "computedHash": "af873a6ecd7c2ae5a147907b026496d088b01f53577518c4e2ad4335dbb0c5d3"
+    },
+    "query-token-audit": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/query-token-audit/SKILL.md",
+      "computedHash": "4328d725723b336f0f743359dd4d6fc238c1721bcfe789097ba7201855612ad5"
+    },
+    "query-token-info": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/query-token-info/SKILL.md",
+      "computedHash": "70c448eec1a9349adf8977ba180ed421be62cc01d49b22bc4035eaae8baac605"
+    },
+    "search-for-service": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/search-for-service/SKILL.md",
+      "computedHash": "ace3e40ae1e1c25e1312102995d5917dbabe2ff9edb547a41803eea5d80b3f17"
+    },
+    "send-usdc": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/send-usdc/SKILL.md",
+      "computedHash": "c1e7e20b0f1eadcadbead12656c5591833c390fc9aca0c9efb10aa6749ba987d"
+    },
+    "square-post": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance/square-post/SKILL.md",
+      "computedHash": "dbd11ff298704ab9b22e9dc78e51e02602830e2222eaa83c9c559100e4f10644"
+    },
+    "trade": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/trade/SKILL.md",
+      "computedHash": "a10a9f3af04483803751aec9b749fef48ad95dee36d27da10279c99952ae1b8e"
+    },
+    "trading-signal": {
+      "source": "binance/binance-skills-hub",
+      "sourceType": "github",
+      "skillPath": "skills/binance-web3/trading-signal/SKILL.md",
+      "computedHash": "3363c91803ed82496034ffbf54b5407ecc9a7713c994fe941328b7be6fccdcf6"
+    },
+    "x402": {
+      "source": "coinbase/agentic-wallet-skills",
+      "sourceType": "github",
+      "skillPath": "skills/x402/SKILL.md",
+      "computedHash": "6626677cfacd5af377e22281e0ab98c1011b432f72cd77d825b077e5e6b87e3c"
+    }
+  }
+}
