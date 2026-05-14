@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 
+import pytest
+
 from backend.attribution import build_attribution
 from backend.auto_scan import _is_cache_fresh
 from backend.compliance import is_trading_advice_request
@@ -147,7 +149,51 @@ def test_http_forbidden_error_detection() -> None:
     assert not is_http_forbidden_error("coingecko: HTTPStatusError: Client error '429 Too Many Requests'")
 
 
-def test_market_falls_back_when_bybit_is_forbidden(monkeypatch) -> None:
+def test_market_uses_bitget_spot_turnover_first(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_get_json(*_, source: str, **__):
+        calls.append(source)
+        if source == "coingecko":
+            return [
+                {
+                    "current_price": 100,
+                    "price_change_percentage_1h_in_currency": 1,
+                    "price_change_percentage_24h_in_currency": 2,
+                    "price_change_percentage_7d_in_currency": 3,
+                    "total_volume": 700,
+                    "market_cap": 1000,
+                }
+            ], None
+        if source == "coingecko_market_chart":
+            return {
+                "prices": [[index, 100 + index] for index in range(220)],
+                "total_volumes": [[index, 700] for index in range(220)],
+            }, None
+        if source == "bitget_spot_ticker":
+            return {"data": [{"quoteVolume": "900", "baseVolume": "9", "lastPr": "100"}]}, None
+        return None, f"{source}: unexpected call"
+
+    monkeypatch.setattr("backend.data_market.get_json", fake_get_json)
+    result = asyncio.run(fetch_market(get_settings(), "BTC"))
+
+    assert result.errors == []
+    assert result.data["technical_source"] == "coingecko_market_chart"
+    assert result.data["spot_turnover_24h"] == 900
+    assert result.data["spot_turnover_source"] == "bitget_spot"
+    assert result.data["bitget_spot_available"] is True
+    assert "bybit_kline" not in calls
+
+
+@pytest.mark.parametrize(
+    ("successful_source", "expected_source", "payload", "turnover"),
+    [
+        ("gate_spot_ticker", "gate_spot", [{"quote_volume": "800", "base_volume": "8", "last": "100"}], 800),
+        ("okx_spot_ticker", "okx_spot", {"data": [{"volCcy24h": "700", "vol24h": "7", "last": "100"}]}, 700),
+        ("binance_spot_ticker", "binance_spot", {"quoteVolume": "600", "volume": "6", "lastPrice": "100"}, 600),
+    ],
+)
+def test_spot_turnover_falls_back_by_priority(monkeypatch, successful_source, expected_source, payload, turnover) -> None:
     async def fake_get_json(*_, source: str, **__):
         if source == "coingecko":
             return [
@@ -160,26 +206,41 @@ def test_market_falls_back_when_bybit_is_forbidden(monkeypatch) -> None:
                     "market_cap": 1000,
                 }
             ], None
-        if source in {"bybit_kline", "bybit_spot_ticker"}:
-            return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
         if source == "coingecko_market_chart":
             return {
                 "prices": [[index, 100 + index] for index in range(220)],
                 "total_volumes": [[index, 700] for index in range(220)],
             }, None
+        if source == successful_source:
+            return payload, None
+        if source in {"bitget_spot_ticker", "gate_spot_ticker", "okx_spot_ticker"}:
+            return None, f"{source}: unavailable"
         return None, f"{source}: unexpected call"
 
     monkeypatch.setattr("backend.data_market.get_json", fake_get_json)
     result = asyncio.run(fetch_market(get_settings(), "BTC"))
 
     assert result.errors == []
-    assert result.data["technical_source"] == "coingecko_market_chart"
-    assert result.data["volume_ratio_vs_7d"] == 1
-    assert "Bybit public kline endpoints returned HTTP 403" in result.data["note"]
+    assert result.data["spot_turnover_source"] == expected_source
+    assert result.data["spot_turnover_24h"] == turnover
 
 
-def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
+def test_derivatives_does_not_call_bybit_when_replacement_succeeds(monkeypatch) -> None:
+    calls: list[str] = []
+
     async def fake_get_json(*_, source: str, **__):
+        calls.append(source)
+        if source == "mexc_contract_ticker":
+            return {
+                "data": {
+                    "symbol": "BTC_USDT",
+                    "fundingRate": "0.0004",
+                    "holdVol": "1000",
+                    "fairPrice": "101",
+                    "indexPrice": "100",
+                    "amount24": "2000",
+                }
+            }, None
         return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
 
     async def fake_deribit_perpetual(*_):
@@ -199,16 +260,127 @@ def test_derivatives_suppresses_bybit_forbidden_errors(monkeypatch) -> None:
     result = asyncio.run(fetch_derivatives(replace(get_settings(), coinalyze_api_key=""), "BTC"))
 
     assert result.errors == []
-    assert "deribit" in result.source
+    assert result.data["mexc_contract_available"] is True
+    assert result.data["funding_rate_now"] == 0.0004
     assert result.data["bybit_available"] is False
-    assert result.data["coinalyze_available"] is False
-    assert result.data["deribit_perpetual_available"] is False
-    assert result.data["hyperliquid_available"] is False
-    assert "returned HTTP 403" in result.data["source_note"]
+    assert "bybit_tickers" not in calls
 
 
-def test_derivatives_prefers_coinalyze_when_configured(monkeypatch) -> None:
+def test_derivatives_prefers_mexc_over_lower_priority_sources(monkeypatch) -> None:
     async def fake_get_json(*_, source: str, **__):
+        if source == "mexc_contract_ticker":
+            return {
+                "data": {
+                    "symbol": "BTC_USDT",
+                    "fundingRate": "0.0003",
+                    "holdVol": "1000",
+                    "fairPrice": "101",
+                    "indexPrice": "100",
+                    "amount24": "2000",
+                }
+            }, None
+        if source == "bitget_contract_funding":
+            return {"data": [{"fundingRate": "0.001"}]}, None
+        if source == "bitget_contract_open_interest":
+            return {"data": {"openInterest": "3"}}, None
+        if source == "bitget_contract_ticker":
+            return {"data": [{"markPrice": "100", "indexPrice": "100", "quoteVolume": "500"}]}, None
+        if source == "okx_contract_funding":
+            return {"data": [{"fundingRate": "0.002"}]}, None
+        if source == "okx_contract_open_interest":
+            return {"data": [{"oiCcy": "4"}]}, None
+        if source == "okx_contract_ticker":
+            return {"data": [{"last": "100", "volCcy24h": "600"}]}, None
+        if source in {"gate_futures_ticker", "gate_futures_contract"}:
+            return {}, None
+        if source == "coingecko_derivatives":
+            return [], None
+        return {}, None
+
+    async def fake_deribit_perpetual(*_):
+        return {"funding_rate_now": 0.004, "open_interest_now": 4000, "basis_pct": 4.0}, []
+
+    async def fake_hyperliquid(*_):
+        return {"funding_rate_now": 0.005, "open_interest_now": 5000, "basis_pct": 5.0}, []
+
+    async def fake_options(*_):
+        return {"put_call_ratio": 0.8, "put_call_volume_ratio": 0.9}, []
+
+    monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
+    monkeypatch.setattr("backend.data_derivatives._fetch_deribit_perpetual", fake_deribit_perpetual)
+    monkeypatch.setattr("backend.data_derivatives._fetch_hyperliquid_perpetual", fake_hyperliquid)
+    monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
+
+    result = asyncio.run(fetch_derivatives(replace(get_settings(), coinalyze_api_key=""), "BTC"))
+
+    assert result.errors == []
+    assert result.data["mexc_contract_available"] is True
+    assert result.data["bitget_contract_available"] is True
+    assert result.data["funding_rate_now"] == 0.0003
+    assert result.data["open_interest_now"] == 1000
+    assert result.data["basis_pct"] == 1.0
+
+
+def test_derivatives_fills_missing_mexc_fields_from_bitget(monkeypatch) -> None:
+    async def fake_get_json(*_, source: str, **__):
+        if source == "mexc_contract_ticker":
+            return {"data": {"symbol": "BTC_USDT", "fairPrice": "101", "indexPrice": "100"}}, None
+        if source == "bitget_contract_funding":
+            return {"data": [{"fundingRate": "0.0005"}]}, None
+        if source == "bitget_contract_open_interest":
+            return {"data": {"openInterest": "3"}}, None
+        if source == "bitget_contract_ticker":
+            return {"data": [{"markPrice": "100", "indexPrice": "100", "quoteVolume": "500"}]}, None
+        if source in {
+            "okx_contract_funding",
+            "okx_contract_open_interest",
+            "okx_contract_ticker",
+            "gate_futures_ticker",
+            "gate_futures_contract",
+        }:
+            return {}, None
+        if source == "coingecko_derivatives":
+            return [], None
+        return {}, None
+
+    async def fake_deribit_perpetual(*_):
+        return {}, []
+
+    async def fake_hyperliquid(*_):
+        return {}, []
+
+    async def fake_options(*_):
+        return {}, []
+
+    monkeypatch.setattr("backend.data_derivatives.get_json", fake_get_json)
+    monkeypatch.setattr("backend.data_derivatives._fetch_deribit_perpetual", fake_deribit_perpetual)
+    monkeypatch.setattr("backend.data_derivatives._fetch_hyperliquid_perpetual", fake_hyperliquid)
+    monkeypatch.setattr("backend.data_derivatives.fetch_deribit_put_call", fake_options)
+
+    result = asyncio.run(fetch_derivatives(replace(get_settings(), coinalyze_api_key=""), "BTC"))
+
+    assert result.errors == []
+    assert result.data["basis_pct"] == 1.0
+    assert result.data["funding_rate_now"] == 0.0005
+    assert result.data["open_interest_now"] == 300
+
+
+def test_derivatives_uses_coinalyze_when_direct_sources_are_missing(monkeypatch) -> None:
+    async def fake_get_json(*_, source: str, **__):
+        if source in {
+            "mexc_contract_ticker",
+            "bitget_contract_funding",
+            "bitget_contract_open_interest",
+            "bitget_contract_ticker",
+            "okx_contract_funding",
+            "okx_contract_open_interest",
+            "okx_contract_ticker",
+            "gate_futures_ticker",
+            "gate_futures_contract",
+        }:
+            return {}, None
+        if source == "coingecko_derivatives":
+            return [], None
         if source == "coinalyze_future_markets":
             return [
                 {
@@ -229,25 +401,6 @@ def test_derivatives_prefers_coinalyze_when_configured(monkeypatch) -> None:
             return [{"symbol": "BTCUSDT_PERP.OKX", "history": [{"t": 1, "c": 900}, {"t": 2, "c": 1000}]}], None
         if source == "coinalyze_liquidation_history":
             return [{"symbol": "BTCUSDT_PERP.OKX", "history": [{"t": 1, "l": 10, "s": 2}, {"t": 2, "l": 5, "s": 1}]}], None
-        if source == "bybit_tickers":
-            return {
-                "retCode": 0,
-                "result": {
-                    "list": [
-                        {
-                            "fundingRate": "0.001",
-                            "openInterestValue": "2000",
-                            "markPrice": "101",
-                            "indexPrice": "100",
-                            "price24hPcnt": "0.01",
-                        }
-                    ]
-                },
-            }, None
-        if source == "bybit_funding_history":
-            return {"retCode": 0, "result": {"list": [{"fundingRate": "0.001", "fundingRateTimestamp": "1"}, {"fundingRate": "0.001", "fundingRateTimestamp": "2"}]}}, None
-        if source == "bybit_open_interest":
-            return {"retCode": 0, "result": {"list": [{"openInterest": "1900", "timestamp": "1"}, {"openInterest": "2000", "timestamp": "2"}]}}, None
         return {}, None
 
     async def fake_deribit_perpetual(*_):
@@ -269,7 +422,7 @@ def test_derivatives_prefers_coinalyze_when_configured(monkeypatch) -> None:
 
     assert result.errors == []
     assert result.data["coinalyze_available"] is True
-    assert result.data["bybit_available"] is True
+    assert result.data["bybit_available"] is False
     assert result.data["funding_rate_now"] == 0.0003
     assert result.data["open_interest_now"] == 1000
     assert result.data["open_interest_change_24h_pct"] == 11.11
@@ -280,6 +433,20 @@ def test_derivatives_prefers_coinalyze_when_configured(monkeypatch) -> None:
 
 def test_derivatives_uses_deribit_and_hyperliquid_fallbacks(monkeypatch) -> None:
     async def fake_get_json(*_, source: str, **__):
+        if source in {
+            "mexc_contract_ticker",
+            "bitget_contract_funding",
+            "bitget_contract_open_interest",
+            "bitget_contract_ticker",
+            "okx_contract_funding",
+            "okx_contract_open_interest",
+            "okx_contract_ticker",
+            "gate_futures_ticker",
+            "gate_futures_contract",
+        }:
+            return {}, None
+        if source == "coingecko_derivatives":
+            return [], None
         return None, f"{source}: HTTPStatusError: Client error '403 Forbidden'"
 
     async def fake_deribit_perpetual(*_):

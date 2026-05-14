@@ -14,6 +14,18 @@ COINGECKO_DEMO = "https://api.coingecko.com/api/v3"
 COINGECKO_PRO = "https://pro-api.coingecko.com/api/v3"
 BYBIT = "https://api.bybit.com"
 COINPAPRIKA = "https://api.coinpaprika.com/v1"
+BITGET = "https://api.bitget.com"
+GATE = "https://api.gateio.ws/api/v4"
+OKX = "https://www.okx.com"
+BINANCE = "https://api.binance.com"
+
+
+SPOT_PROVIDER_FIELDS = (
+    ("bitget_spot", "bitget_spot_available"),
+    ("gate_spot", "gate_spot_available"),
+    ("okx_spot", "okx_spot_available"),
+    ("binance_spot", "binance_spot_available"),
+)
 
 
 def _market_signal(price: float | None, chg24: float | None, ema20: float | None, ema50: float | None) -> str:
@@ -152,13 +164,14 @@ async def _coingecko_4h_snapshot(client: httpx.AsyncClient, settings: Settings, 
 async def fetch_4h_market_snapshot(settings: Settings, asset: str) -> LayerResult:
     errors: list[str] = []
     async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
-        snapshot, bybit_errors = await _bybit_4h_snapshot(client, asset)
-        source = "bybit"
+        snapshot, cg_errors = await _coingecko_4h_snapshot(client, settings, asset)
+        errors.extend(cg_errors)
+        source = "coingecko"
         if not snapshot:
-            errors.extend(bybit_errors)
-            snapshot, cg_errors = await _coingecko_4h_snapshot(client, settings, asset)
-            errors.extend(cg_errors)
-            source = "coingecko" if snapshot else "unavailable"
+            snapshot, bybit_errors = await _bybit_4h_snapshot(client, asset)
+            if bybit_errors and not all(is_http_forbidden_error(error) for error in bybit_errors):
+                errors.extend(bybit_errors)
+            source = "bybit" if snapshot else "unavailable"
         direction = classify_4h_direction(
             asset,
             snapshot.get("price_change_4h_pct"),
@@ -273,6 +286,164 @@ async def _bybit_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dic
     }, []
 
 
+def _spot_formats(asset: str) -> dict[str, str]:
+    return {
+        "compact": ASSET_META[asset]["symbol"],
+        "gate": f"{asset}_USDT",
+        "okx": f"{asset}-USDT",
+    }
+
+
+def _provider_payload(
+    *,
+    provider: str,
+    symbol: str,
+    turnover: float | None = None,
+    base_volume: float | None = None,
+    last_price: float | None = None,
+    error: str | None = None,
+    unit_note: str | None = None,
+) -> dict:
+    payload = {
+        "provider": provider,
+        "symbol": symbol,
+        "spot_turnover_24h": turnover,
+        "spot_volume_24h_base": base_volume,
+        "last_price": last_price,
+    }
+    if error:
+        payload["error"] = error
+    if unit_note:
+        payload["unit_note"] = unit_note
+    return payload
+
+
+async def _bitget_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:
+    symbol = _spot_formats(asset)["compact"]
+    data, error = await get_json(
+        client,
+        f"{BITGET}/api/v2/spot/market/tickers",
+        params={"symbol": symbol},
+        source="bitget_spot_ticker",
+    )
+    if error or not isinstance(data, dict):
+        return {}, [error or "bitget_spot_ticker: empty response"]
+    rows = data.get("data")
+    if not isinstance(rows, list) or not rows:
+        return {}, [f"bitget_spot_ticker: {data.get('msg') or 'empty result'}"]
+    row = rows[0]
+    turnover = safe_float(row.get("quoteVolume")) or safe_float(row.get("usdtVolume"))
+    return _provider_payload(
+        provider="bitget",
+        symbol=symbol,
+        turnover=turnover,
+        base_volume=safe_float(row.get("baseVolume")),
+        last_price=safe_float(row.get("lastPr")) or safe_float(row.get("close")),
+    ), []
+
+
+async def _gate_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:
+    symbol = _spot_formats(asset)["gate"]
+    data, error = await get_json(
+        client,
+        f"{GATE}/spot/tickers",
+        params={"currency_pair": symbol},
+        source="gate_spot_ticker",
+    )
+    if error or not isinstance(data, list) or not data:
+        return {}, [error or "gate_spot_ticker: empty response"]
+    row = data[0]
+    return _provider_payload(
+        provider="gate",
+        symbol=symbol,
+        turnover=safe_float(row.get("quote_volume")),
+        base_volume=safe_float(row.get("base_volume")),
+        last_price=safe_float(row.get("last")),
+    ), []
+
+
+async def _okx_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:
+    symbol = _spot_formats(asset)["okx"]
+    data, error = await get_json(
+        client,
+        f"{OKX}/api/v5/market/ticker",
+        params={"instId": symbol},
+        source="okx_spot_ticker",
+    )
+    if error or not isinstance(data, dict):
+        return {}, [error or "okx_spot_ticker: empty response"]
+    rows = data.get("data")
+    if not isinstance(rows, list) or not rows:
+        return {}, [f"okx_spot_ticker: {data.get('msg') or 'empty result'}"]
+    row = rows[0]
+    return _provider_payload(
+        provider="okx",
+        symbol=symbol,
+        turnover=safe_float(row.get("volCcy24h")),
+        base_volume=safe_float(row.get("vol24h")),
+        last_price=safe_float(row.get("last")),
+    ), []
+
+
+async def _binance_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:
+    symbol = _spot_formats(asset)["compact"]
+    data, error = await get_json(
+        client,
+        f"{BINANCE}/api/v3/ticker/24hr",
+        params={"symbol": symbol},
+        source="binance_spot_ticker",
+    )
+    if error or not isinstance(data, dict):
+        return {}, [error or "binance_spot_ticker: empty response"]
+    return _provider_payload(
+        provider="binance",
+        symbol=symbol,
+        turnover=safe_float(data.get("quoteVolume")),
+        base_volume=safe_float(data.get("volume")),
+        last_price=safe_float(data.get("lastPrice")),
+    ), []
+
+
+async def _replacement_spot_ticker(client: httpx.AsyncClient, asset: str) -> tuple[dict, list[str]]:
+    provider_calls = (
+        ("bitget_spot", "bitget_spot_available", _bitget_spot_ticker),
+        ("gate_spot", "gate_spot_available", _gate_spot_ticker),
+        ("okx_spot", "okx_spot_available", _okx_spot_ticker),
+        ("binance_spot", "binance_spot_available", _binance_spot_ticker),
+    )
+    diagnostics: dict = {data_key: {} for data_key, _ in SPOT_PROVIDER_FIELDS}
+    diagnostics.update({flag_key: False for _, flag_key in SPOT_PROVIDER_FIELDS})
+    errors: list[str] = []
+    selected: dict | None = None
+    selected_key: str | None = None
+
+    for data_key, flag_key, fetcher in provider_calls:
+        payload, provider_errors = await fetcher(client, asset)
+        if payload:
+            diagnostics[data_key] = payload
+            diagnostics[flag_key] = payload.get("spot_turnover_24h") is not None
+            if selected is None and payload.get("spot_turnover_24h") is not None:
+                selected = payload
+                selected_key = data_key
+                break
+        else:
+            error = provider_errors[0] if provider_errors else f"{data_key}: unavailable"
+            diagnostics[data_key] = {"provider": data_key.removesuffix("_spot"), "error": error}
+            errors.extend(provider_errors)
+
+    if selected is None:
+        return diagnostics, errors
+
+    diagnostics.update(
+        {
+            "spot_turnover_24h": selected.get("spot_turnover_24h"),
+            "spot_volume_24h_base": selected.get("spot_volume_24h_base"),
+            "spot_turnover_source": selected_key,
+        }
+    )
+    return diagnostics, []
+
+
 async def fetch_market(settings: Settings, asset: str) -> LayerResult:
     notes: list[str] = []
     async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
@@ -282,20 +453,17 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
             primary, fallback_errors = await _coinpaprika(client, asset)
             errors.extend(fallback_errors)
             source = "coinpaprika" if primary else "unavailable"
-        technicals, technical_errors = await _bybit_klines(client, asset)
-        if technical_errors and all(is_http_forbidden_error(error) for error in technical_errors):
-            notes.append("Bybit public kline endpoints returned HTTP 403 in this runtime; using CoinGecko market chart for EMA and 7d volume.")
-            technicals, chart_errors = await _coingecko_market_chart(client, settings, asset)
+        technicals, chart_errors = await _coingecko_market_chart(client, settings, asset)
+        if not technicals:
+            technicals, bybit_errors = await _bybit_klines(client, asset)
+            if bybit_errors and not all(is_http_forbidden_error(error) for error in bybit_errors):
+                errors.extend(bybit_errors)
             errors.extend(chart_errors)
-        else:
-            errors.extend(technical_errors)
-        bybit_spot, spot_errors = await _bybit_spot_ticker(client, asset)
-        if spot_errors and all(is_http_forbidden_error(error) for error in spot_errors):
-            notes.append("Bybit spot ticker returned HTTP 403 in this runtime; using primary market volume where possible.")
-        else:
+        spot_ticker, spot_errors = await _replacement_spot_ticker(client, asset)
+        if spot_errors and not spot_ticker.get("spot_turnover_24h"):
             errors.extend(spot_errors)
 
-    merged = {"asset": asset, **primary, **technicals, **bybit_spot}
+    merged = {"asset": asset, **primary, **technicals, **spot_ticker}
     turnover_24h = merged.get("spot_turnover_24h") or merged.get("volume_24h")
     merged["volume_ratio_vs_7d"] = round_float(
         (turnover_24h / merged["volume_7d_avg"])
@@ -303,7 +471,7 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
         else None
     )
     merged["volume_ratio_source"] = (
-        "bybit_spot_turnover_vs_bybit_7d_avg_turnover"
+        f"{merged.get('spot_turnover_source')}_turnover_vs_7d_avg_volume"
         if merged.get("spot_turnover_24h") is not None
         else "primary_market_volume_vs_technical_7d_avg_volume"
     )
@@ -327,5 +495,5 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
     if notes:
         merged["note"] = " ".join(notes)
     elif merged.get("volume_7d_avg") is None:
-        merged["note"] = "EMA/7d volume use Bybit public klines and may be unavailable if Bybit is blocked."
+        merged["note"] = "EMA/7d volume use CoinGecko market chart when available, with Bybit only as an optional last-resort fallback."
     return LayerResult(layer="market", source=source, data=merged, errors=errors)
