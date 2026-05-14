@@ -1,35 +1,11 @@
 
-# Crypto Research Agent Frontend
+  # Design frontend for project
 
-Vite frontend for the Crypto Research Agent.
+  This is a code bundle for Design frontend for project. The original project is available at https://www.figma.com/design/oMg4PV5l31NtQK9HwuUuna/Design-frontend-for-project.
 
-## Local Development
+  ## Running the code
 
-Start the Python FastAPI backend from the repository root first:
+  Run `npm i` to install the dependencies.
 
-```bash
-python -m backend.server
-```
-
-Then start the frontend:
-
-```bash
-npm install
-npm run dev
-```
-
-The Vite dev server proxies `/api` to `http://127.0.0.1:8000`, so
-`VITE_API_URL` may be left empty locally. To set it explicitly, copy
-`.env.local.example` to `.env.local`.
-
-## Production
-
-Set `VITE_API_URL` to the public URL of the deployed FastAPI backend before
-building:
-
-```text
-VITE_API_URL=https://andrew418-crypto-research-agent.hf.space
-```
-
-This variable is embedded at build time, so rebuild and redeploy the frontend
-after changing it.
+  Run `npm run dev` to start the development server.
+  
