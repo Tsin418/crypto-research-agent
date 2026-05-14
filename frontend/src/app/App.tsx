@@ -11,6 +11,7 @@ import {
   Settings2,
   Play,
   Loader2,
+  BarChart3,
 } from "lucide-react";
 import { Overview } from "./components/Overview";
 import { Reports } from "./components/Reports";
@@ -20,69 +21,29 @@ import { DataSources } from "./components/DataSources";
 import { AttributionTrace } from "./components/AttributionTrace";
 import { Settings } from "./components/Settings";
 import { ReportDetail } from "./components/ReportDetail";
+import { ResearchDashboard } from "./components/dashboard/ResearchDashboard";
 import { getApiBaseUrl, getDisplayApiBaseUrl, getWorkerApiBaseUrl, requestJson } from "./api";
+import type {
+  AssetSelection,
+  TimeWindow,
+  ReportRecord,
+  DashboardData,
+  ResearchReport,
+  MarketScanRecord,
+  BackendHealth,
+} from "./components/dashboard/types";
 
-type Page = "overview" | "reports" | "autoscan" | "onchain" | "sources" | "trace" | "settings" | "detail";
+type Page = "overview" | "reports" | "autoscan" | "onchain" | "sources" | "trace" | "settings" | "detail" | "dashboard";
 type ParentPage = "overview" | "reports" | "autoscan";
-type AssetSel = "AUTO" | "BTC" | "ETH";
-type WindowSel = "4h" | "24h" | "7d";
-
-interface ReportRecord {
-  report_id: string;
-  status: "processing" | "completed" | "failed";
-  user_query: string;
-  asset: string | null;
-  mode: string | null;
-  time_window: string | null;
-  report_markdown: string | null;
-  risk_score: number | null;
-  risk_level: string | null;
-  price_now?: number | null;
-  price_change_4h_pct?: number | null;
-  price_change_24h_pct?: number | null;
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DashboardData {
-  report_id: string;
-  snapshots: Record<string, unknown>;
-  normalized_signals: unknown[];
-  api_call_logs: unknown[];
-}
-
-interface ResearchReport {
-  id: string;
-  query: string;
-  createdAt: string;
-  metadata: ReportRecord;
-  dashboardData?: DashboardData;
-  reportMarkdown: string;
-  error?: string;
-}
-
-interface MarketScanRecord {
-  asset: "BTC" | "ETH";
-  price_now: number | null;
-  price_change_4h_pct: number | null;
-  direction: "rising" | "falling" | "neutral";
-  direction_label_zh: string;
-  created_at: string;
-}
-
-interface BackendHealth {
-  online: boolean;
-  checked: boolean;
-  apiUrl: string;
-  error?: string;
-}
+type AssetSel = AssetSelection;
+type WindowSel = TimeWindow;
 
 const MAX_POLL_RETRIES = 30;
 const POLL_INTERVAL_MS = 2000;
 
 const navItems: { id: Exclude<Page, "detail">; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "Overview", icon: <LayoutDashboard size={14} /> },
+  { id: "dashboard", label: "Dashboard", icon: <BarChart3 size={14} /> },
   { id: "reports", label: "Reports", icon: <FileText size={14} /> },
   { id: "autoscan", label: "Auto Scan", icon: <RefreshCw size={14} /> },
   { id: "onchain", label: "On-chain", icon: <Link2 size={14} /> },
@@ -184,19 +145,19 @@ export default function App() {
   const recentReports = useMemo(
     () =>
       reports.slice(0, 3).map((report) => {
-        const ageMs = Date.now() - new Date(report.metadata.updated_at).getTime();
+        const ageMs = Date.now() - new Date(report.metadata?.updated_at || Date.now()).getTime();
         const ageMin = Math.round(ageMs / 60000);
         const isStale = ageMin > 30;
         const ageLabel = ageMin < 1 ? "just now" : ageMin < 60 ? `${ageMin}m ago` : `${Math.round(ageMin / 60)}h ago`;
         return {
           id: report.id,
-          label: report.metadata.asset ? `${report.metadata.asset} ${report.metadata.time_window || "report"}` : "Research report",
-          sub: `${report.metadata.risk_level || report.metadata.status} · ${ageLabel}`,
+          label: report.metadata?.asset ? `${report.metadata.asset} ${report.metadata.time_window || "report"}` : "Research report",
+          sub: `${report.metadata?.risk_level || report.metadata?.status || "unknown"} · ${ageLabel}`,
           stale: isStale,
           color:
-            report.metadata.status === "failed"
+            report.metadata?.status === "failed"
               ? "bg-red-500"
-              : report.metadata.asset === "ETH"
+              : report.metadata?.asset === "ETH"
                 ? "bg-blue-500"
                 : "bg-orange-500",
         };
@@ -205,7 +166,7 @@ export default function App() {
   );
 
   const hasCompletedReports = useMemo(
-    () => reports.some((report) => report.metadata.status === "completed"),
+    () => reports.some((report) => report.metadata?.status === "completed"),
     [reports]
   );
 
@@ -352,13 +313,19 @@ export default function App() {
     void handleGenerateReport({ asset: selectedAsset, query });
   }
 
-  const activePage: Exclude<Page, "detail"> = page === "detail" ? detailParentPage : (page as Exclude<Page, "detail">);
+  function handleExampleSelect(query: string) {
+    setQueryDraft(query);
+    void handleGenerateReport({ query, openDetail: false });
+  }
+
+  const activePage: Exclude<Page, "detail"> = page === "detail" ? detailParentPage : page as Exclude<Page, "detail">;
+  const isDashboardPage = page === "dashboard";
 
   const pageComponents: Record<Page, React.ReactNode> = {
     overview: (
       <Overview
         queryDraft={queryDraft}
-        reports={reports.map((report) => report.metadata)}
+        reports={reports.map((r) => r.metadata).filter((r): r is ReportRecord => r != null)}
         onQueryChange={setQueryDraft}
         onGenerateReport={handleGenerateReport}
         onGenerateAssetReport={handleGenerateAssetReport}
@@ -370,7 +337,23 @@ export default function App() {
         backendHealth={backendHealth}
       />
     ),
-    reports: <Reports reports={reports.map((report) => report.metadata)} onOpenDetail={(id) => openReportDetail("reports", id)} />,
+    dashboard: (
+      <ResearchDashboard
+        report={currentReport}
+        asset={asset}
+        timeWindow={timeframe}
+        queryDraft={queryDraft}
+        isLoading={isGenerating}
+        processingQuery={isGenerating ? queryDraft : null}
+        errorMessage={errorMessage}
+        onAssetChange={(v) => setAsset(v)}
+        onTimeWindowChange={(v) => setTimeframe(v)}
+        onQueryChange={setQueryDraft}
+        onGenerate={() => { void handleGenerateReport({ openDetail: false }); }}
+        onExampleSelect={handleExampleSelect}
+      />
+    ),
+    reports: <Reports reports={reports.map((r) => r.metadata).filter((r): r is ReportRecord => r != null)} onOpenDetail={(id) => openReportDetail("reports", id)} />,
     autoscan: <AutoScan onOpenDetail={(reportId) => openReportDetail("autoscan", reportId || currentReportId || reports[0]?.id)} />,
     onchain: <OnchainEvents currentReportId={currentReportId} currentAsset={asset === "AUTO" ? "BTC" : asset} />,
     sources: <DataSources reportId={currentReportId} />,
@@ -386,14 +369,8 @@ export default function App() {
     ),
     detail: (
       <ReportDetail
-        reportId={currentReport?.id}
-        asset={(currentReport?.metadata.asset || (asset === "AUTO" ? "BTC" : asset)) as string}
-        query={currentReport?.query || queryDraft}
-        reportMarkdown={currentReport?.reportMarkdown}
-        reportStatus={currentReport?.metadata.status}
-        riskScore={currentReport?.metadata.risk_score ?? undefined}
-        riskLevel={currentReport?.metadata.risk_level ?? undefined}
-        updatedAt={currentReport?.metadata.updated_at}
+        report={currentReport}
+        defaultAsset={(asset === "AUTO" ? "BTC" : asset) as string}
         errorMessage={currentReport?.error || errorMessage || undefined}
         dashboardData={currentReport?.dashboardData}
         onBack={() => setPage(detailParentPage)}
@@ -412,36 +389,40 @@ export default function App() {
           Research-only
         </span>
 
-        <div className="flex-1 relative max-w-xl">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            className="w-full text-xs border border-slate-200 rounded-xl pl-8 pr-4 py-2 outline-none focus:border-blue-400 bg-slate-50"
-            placeholder="Ask a research question (e.g., Why did BTC drop in the past 4h?)"
-            value={queryDraft}
-            onChange={(e) => setQueryDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleGenerateReport()}
-          />
-        </div>
+        {!isDashboardPage && (
+          <>
+            <div className="flex-1 relative max-w-xl">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                className="w-full text-xs border border-slate-200 rounded-xl pl-8 pr-4 py-2 outline-none focus:border-blue-400 bg-slate-50"
+                placeholder="Ask a research question (e.g., Why did BTC drop in the past 4h?)"
+                value={queryDraft}
+                onChange={(e) => setQueryDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleGenerateReport()}
+              />
+            </div>
 
-        <DropdownPicker<AssetSel> value={asset} options={["AUTO", "BTC", "ETH"] as const} onChange={setAsset} />
-        <DropdownPicker<WindowSel> value={timeframe} options={["4h", "24h", "7d"] as const} onChange={setTimeframe} />
+            <DropdownPicker<AssetSel> value={asset} options={["AUTO", "BTC", "ETH"] as const} onChange={setAsset} />
+            <DropdownPicker<WindowSel> value={timeframe} options={["4h", "24h", "7d"] as const} onChange={setTimeframe} />
 
-        <button
-          onClick={() => setPage("autoscan")}
-          className="hidden sm:flex items-center gap-1.5 text-xs border border-blue-200 text-blue-600 rounded-lg px-3 py-2 hover:bg-blue-50 transition-colors"
-          style={{ fontWeight: 500 }}
-        >
-          <Play size={11} /> Auto Scan
-        </button>
+            <button
+              onClick={() => setPage("autoscan")}
+              className="hidden sm:flex items-center gap-1.5 text-xs border border-blue-200 text-blue-600 rounded-lg px-3 py-2 hover:bg-blue-50 transition-colors"
+              style={{ fontWeight: 500 }}
+            >
+              <Play size={11} /> Auto Scan
+            </button>
 
-        <button
-          onClick={() => handleGenerateReport()}
-          disabled={isGenerating || !queryDraft.trim()}
-          className="text-xs bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 transition-colors disabled:opacity-50 shrink-0 min-w-[88px]"
-          style={{ fontWeight: 500 }}
-        >
-          {isGenerating ? <Loader2 size={13} className="animate-spin mx-auto" /> : "Generate"}
-        </button>
+            <button
+              onClick={() => handleGenerateReport()}
+              disabled={isGenerating || !queryDraft.trim()}
+              className="text-xs bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 transition-colors disabled:opacity-50 shrink-0 min-w-[88px]"
+              style={{ fontWeight: 500 }}
+            >
+              {isGenerating ? <Loader2 size={13} className="animate-spin mx-auto" /> : "Generate"}
+            </button>
+          </>
+        )}
 
         <div className="flex items-center gap-2 text-xs text-slate-500 pl-2 border-l border-slate-100 shrink-0">
           <span className="flex items-center gap-1" title={`Backend API: ${backendHealth.apiUrl}`}>
