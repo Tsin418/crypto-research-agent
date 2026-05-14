@@ -2,106 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import { Sparkline } from "./Sparkline";
 import { TrendingDown, TrendingUp, Minus, Play, FileText } from "lucide-react";
 import { requestJson } from "../api";
-
-interface BackendReport {
-  report_id: string;
-  status: "processing" | "completed" | "failed";
-  user_query: string;
-  asset: string | null;
-  mode: string | null;
-  time_window: string | null;
-  report_markdown: string | null;
-  risk_score: number | null;
-  risk_level: string | null;
-  price_now?: number | null;
-  price_change_4h_pct?: number | null;
-  price_change_24h_pct?: number | null;
-  direction?: string | null;
-  direction_label_zh?: string | null;
-  trigger_reason?: string | null;
-  top_news_title?: string | null;
-  top_news_url?: string | null;
-  top_news_source?: string | null;
-  top_news_json?: {
-    title?: string;
-    url?: string;
-    source?: string;
-    reason_zh?: string;
-  } | null;
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DashboardData {
-  report_id: string;
-  snapshots: Record<string, { data?: unknown; source?: string; created_at?: string }>;
-  normalized_signals: NormalizedSignal[];
-  api_call_logs: unknown[];
-}
-
-interface NormalizedSignal {
-  layer?: string;
-  signal_name?: string;
-  signal_value?: string;
-  direction?: string;
-  impact_level?: string;
-  confidence?: number;
-}
-
-interface AttributionDriver {
-  driver?: string;
-  category?: string;
-  score?: number;
-  confidence?: number;
-  explanation?: string;
-  evidence?: string[];
-}
-
-interface SourceHealth {
-  provider: string;
-  success_count: number;
-  error_count: number;
-  avg_latency_ms: number;
-  health_status: string;
-}
-
-interface NewsEvent {
-  title?: string;
-  direction?: string;
-  impact_level?: string;
-  category?: string;
-  source?: string;
-  url?: string;
-}
-
-interface OnchainTransfer {
-  hash?: string;
-  amount?: number | string;
-  direction?: string;
-  from_label?: string;
-  to_label?: string;
-}
-
-interface MarketScanRecord {
-  asset: "BTC" | "ETH";
-  price_now: number | null;
-  price_change_4h_pct: number | null;
-  direction: "rising" | "falling" | "neutral";
-  direction_label_zh: string;
-  created_at: string;
-}
-
-interface BackendHealth {
-  online: boolean;
-  checked: boolean;
-  apiUrl: string;
-  error?: string;
-}
+import type {
+  ReportRecord,
+  DashboardData,
+  AttributionDriver,
+  SourceHealth,
+  NewsEvent,
+  LargeTransfer,
+  MarketScanRecord,
+  BackendHealth,
+} from "./dashboard/types";
 
 interface OverviewProps {
   queryDraft?: string;
-  reports?: BackendReport[];
+  reports?: ReportRecord[];
   onQueryChange?: (q: string) => void;
   onGenerateReport?: () => void;
   onGenerateAssetReport?: (asset: "BTC" | "ETH") => void;
@@ -115,7 +29,7 @@ interface OverviewProps {
 
 const emptySparkData = [0, 0, 0, 0, 0, 0, 0];
 
-function unwrapLayer<T extends Record<string, unknown>>(dashboardData: DashboardData | null, layer: string): T {
+function unwrapLayer<T>(dashboardData: DashboardData | null, layer: string): T {
   const snapshot = dashboardData?.snapshots?.[layer];
   const payload = snapshot?.data;
 
@@ -123,7 +37,7 @@ function unwrapLayer<T extends Record<string, unknown>>(dashboardData: Dashboard
     return ((payload as { data?: T }).data || {}) as T;
   }
 
-  return ((payload as T) || {}) as T;
+  return (payload as T) || ({} as T);
 }
 
 function formatCurrency(value: number | null | undefined, compact = false) {
@@ -193,7 +107,6 @@ function SignalBadge({ status }: { status: string }) {
 function driverCategory(driver: AttributionDriver) {
   const evidence = (driver.evidence || []).join(" ").toLowerCase();
   const name = (driver.driver || "").toLowerCase();
-  if (driver.category) return driver.category;
   if (evidence.includes("derivative") || name.includes("leverage") || name.includes("funding")) return "Derivatives";
   if (evidence.includes("etf") || name.includes("etf")) return "ETF Flow";
   if (evidence.includes("macro") || name.includes("macro")) return "Macro";
@@ -333,7 +246,7 @@ export function Overview({
   }>(dashboardData, "risk");
   const news = unwrapLayer<{ events?: NewsEvent[]; top_news?: NewsEvent }>(dashboardData, "news");
   const onchain = unwrapLayer<{
-    large_transfers?: OnchainTransfer[];
+    large_transfers?: LargeTransfer[];
     stablecoin_supply_change_24h?: number;
     stablecoin_supply_usd?: number;
   }>(dashboardData, "onchain");

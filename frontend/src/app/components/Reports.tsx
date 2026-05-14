@@ -1,16 +1,6 @@
 import { useState } from "react";
 import { Search, FileText } from "lucide-react";
-
-interface BackendReport {
-  report_id: string;
-  status: string;
-  user_query: string;
-  asset: string | null;
-  mode: string | null;
-  risk_level: string | null;
-  error_message?: string | null;
-  updated_at: string;
-}
+import type { ReportRecord } from "./dashboard/types";
 
 interface DisplayReport {
   id: string;
@@ -54,7 +44,7 @@ export function Reports({
   reports: backendReports,
   onOpenDetail,
 }: {
-  reports?: BackendReport[];
+  reports?: ReportRecord[];
   onOpenDetail?: (reportId?: string) => void;
 } = {}) {
   const [activeFilter, setActiveFilter] = useState("All");

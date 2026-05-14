@@ -125,7 +125,7 @@ export function ResearchDashboard({
 
           {isLoading ? (
             <DashboardSkeleton query={processingQuery || queryDraft} asset={asset} timeWindow={timeWindow} />
-          ) : hasReport ? (
+          ) : report ? (
             <>
               <ReportSummaryHeader report={report} />
 
@@ -240,6 +240,7 @@ function TopBar({
             <SelectValue placeholder="Window" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="4h">4h</SelectItem>
             <SelectItem value="24h">24h</SelectItem>
             <SelectItem value="7d">7d</SelectItem>
           </SelectContent>

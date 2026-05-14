@@ -1,16 +1,28 @@
 import { useState } from "react";
 import { ArrowLeft, Copy, Download, ExternalLink, GitBranch, ChevronDown, ChevronUp } from "lucide-react";
 import { labelForField, shortenHash } from "../../utils/labels";
+import type {
+  ResearchReport,
+  DashboardData,
+  MarketData,
+  RiskData,
+  AttributionData,
+  AttributionDriver,
+  DerivativesData,
+  NewsData,
+  NewsEvent,
+  OnchainData,
+  LargeTransfer,
+  ETFData,
+  MacroData,
+  NormalizedSignal,
+  ApiCallLog,
+  SnapshotEnvelope,
+} from "./dashboard/types";
 
 interface ReportDetailProps {
-  reportId?: string;
-  asset?: string;
-  query?: string;
-  reportMarkdown?: string;
-  reportStatus?: string;
-  riskScore?: number;
-  riskLevel?: string | null;
-  updatedAt?: string;
+  report: ResearchReport | null;
+  defaultAsset?: string;
   errorMessage?: string;
   onBack?: () => void;
   onOpenTrace?: () => void;
@@ -26,191 +38,47 @@ const TABS: { id: DetailTab; label: string }[] = [
   { id: "markdown", label: "Markdown" },
 ];
 
-// — Data —
+// — Data extraction helpers —
 
-const marketSnapshot: { label: string; value: string }[] = [
-  { label: "price_now", value: "$102,430" },
-  { label: "price_change_1h_pct", value: "-0.41%" },
-  { label: "price_change_4h_pct", value: "-1.82%" },
-  { label: "price_change_24h_pct", value: "-2.71%" },
-  { label: "price_change_7d_pct", value: "-4.92%" },
-  { label: "volume_24h", value: "$48.2B" },
-  { label: "volume_ratio_vs_7d", value: "1.18x" },
-  { label: "market_cap", value: "$2.02T" },
-  { label: "market_signal", value: "bearish" },
-  { label: "spot_turnover_24h", value: "$18.4B" },
-  { label: "spot_flow_bias", value: "sell-heavy" },
-  { label: "spot_cvd_approx_4h", value: "-$142M" },
-  { label: "price_vs_ema20", value: "below" },
-  { label: "price_vs_ema50", value: "below" },
-  { label: "price_vs_ema200", value: "above" },
-];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function unwrapLayer<T>(dashboardData: DashboardData | undefined | null, layer: string): T {
+  const snapshot = (dashboardData?.snapshots || {})[layer] as SnapshotEnvelope<T> | undefined;
+  const payload = snapshot?.data;
+  if (payload && typeof payload === "object" && "data" in payload) {
+    return ((payload as { data?: T }).data || {}) as T;
+  }
+  return (payload as T) || ({} as T);
+}
 
-const riskBreakdown = [
-  { label: "Derivatives", value: 3, max: 3 },
-  { label: "Spot flow", value: 2, max: 3 },
-  { label: "News / Macro", value: 1, max: 2 },
-  { label: "On-chain", value: 1, max: 2 },
-  { label: "ETF flow", value: 0, max: 2 },
-];
+function formatCurrency(value: number | null | undefined, compact = false): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    notation: compact ? "compact" : "standard",
+    maximumFractionDigits: compact ? 1 : value >= 1000 ? 0 : 2,
+  }).format(value);
+}
 
-const drivers = [
-  {
-    type: "Primary",
-    color: "bg-blue-100 text-blue-700",
-    driver: "Long leverage flush",
-    explanation: "Funding rate inverted and OI dropped 8.4% during the 4h window, indicating forced long unwinding.",
-    score: 2.84,
-    confidence: 0.78,
-    direction: "bearish",
-    causality: "high",
-  },
-  {
-    type: "Secondary",
-    color: "bg-orange-100 text-orange-700",
-    driver: "Weak spot demand",
-    explanation: "Spot CVD turned negative; sell-side flow dominated centralized exchanges.",
-    score: 2.12,
-    confidence: 0.66,
-    direction: "bearish",
-    causality: "medium",
-  },
-  {
-    type: "Noise",
-    color: "bg-slate-100 text-slate-600",
-    driver: "Stablecoin supply chatter",
-    explanation: "USDT supply changed within normal range; no causal contribution detected.",
-    score: 0.41,
-    confidence: 0.32,
-    direction: "neutral",
-    causality: "low",
-  },
-];
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
 
-const signals = [
-  { layer: "derivatives", name: "Funding rate", value: "-0.012%", direction: "bearish", impact: "high", confidence: 0.81 },
-  { layer: "derivatives", name: "Open interest", value: "-8.4%", direction: "bearish", impact: "high", confidence: 0.77 },
-  { layer: "market", name: "Spot CVD 4h", value: "-$142M", direction: "bearish", impact: "high", confidence: 0.74 },
-  { layer: "derivatives", name: "Put/call ratio", value: "1.31", direction: "bearish", impact: "medium", confidence: 0.62 },
-  { layer: "etf_flow", name: "ETF net flow", value: "-$180M", direction: "bearish", impact: "medium", confidence: 0.70 },
-  { layer: "macro", name: "DXY 4h", value: "+0.31%", direction: "bearish", impact: "low", confidence: 0.55 },
-  { layer: "onchain", name: "Exchange inflow", value: "1,240 BTC", direction: "bearish", impact: "medium", confidence: 0.61 },
-  { layer: "news", name: "Sentiment", value: "risk-off", direction: "bearish", impact: "medium", confidence: 0.58 },
-];
+function formatNumber(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
+}
 
-const derivativesData = [
-  { k: "provider", v: "Deribit" },
-  { k: "symbol", v: "BTC-PERP" },
-  { k: "funding_rate_now", v: "-0.012%" },
-  { k: "funding_rate_8h_ago", v: "+0.008%" },
-  { k: "funding_rate_change", v: "-0.020%" },
-  { k: "open_interest_now", v: "$12.4B" },
-  { k: "open_interest_change_24h_pct", v: "-8.4%" },
-  { k: "mark_price", v: "$102,415" },
-  { k: "basis_pct", v: "-0.04%" },
-  { k: "put_call_ratio", v: "1.31" },
-  { k: "liquidation_bias", v: "long-skewed" },
-  { k: "long_liquidations_24h", v: "$142M" },
-];
+function formatLabel(value: string | null | undefined): string {
+  if (!value) return "n/a";
+  return value.replaceAll("_", " ");
+}
 
-const newsEvents = [
-  {
-    title: "Macro risk-off pressures crypto majors",
-    source: "Reuters",
-    url: "#",
-    direction: "bearish",
-    impact: "high",
-    category: "macro",
-    confidence: 0.74,
-    reason: "DXY strength + treasury yields breaking range.",
-  },
-  {
-    title: "BTC derivatives flush aligned with spot weakness",
-    source: "Coindesk",
-    url: "#",
-    direction: "bearish",
-    impact: "medium",
-    category: "derivatives",
-    confidence: 0.68,
-    reason: "Liquidation cascade reported across major venues.",
-  },
-  {
-    title: "ETF outflows continue for 3rd consecutive day",
-    source: "Bloomberg",
-    url: "#",
-    direction: "bearish",
-    impact: "medium",
-    category: "etf",
-    confidence: 0.71,
-    reason: "Net redemption from IBIT/FBTC.",
-  },
-];
-
-const largeTransfers = [
-  { hash: "0x3fa1b29d4c2e8f0a7b3c1d5e6f9a2b4c", amount: "1,240 BTC", from: "Coinbase Custody", to: "Binance", direction: "inflow", ts: "14:18" },
-  { hash: "0x9c4d7e2f1a0b3c5d8e9f2a4b6c8d0e2f", amount: "830 BTC", from: "Unknown", to: "Kraken", direction: "inflow", ts: "13:42" },
-  { hash: "0x71cc059a8b2c4d6e8f0a2b4c6d8e0f2a", amount: "710 BTC", from: "Kraken", to: "Cold wallet", direction: "outflow", ts: "12:55" },
-];
-
-const etfFlowData = [
-  { k: "btc_etf_net_flow_usd_m", v: "-180.4" },
-  { k: "flow_direction", v: "outflow" },
-  { k: "etf_flow_signal", v: "bearish" },
-  { k: "flow_intensity", v: "moderate" },
-  { k: "is_stale", v: "false" },
-  { k: "source", v: "Farside" },
-];
-
-const macroData = [
-  { k: "macro_signal", v: "risk-off" },
-  { k: "macro_confidence", v: "0.62" },
-  { k: "macro_signal_evidence", v: "DXY +0.31%, US10Y +4bp, SPX -0.74%" },
-  { k: "source", v: "FRED + Yahoo" },
-];
-
-const dataQuality = [
-  { layer: "Market", status: "ok", source: "CoinGecko", quality: 0.94 },
-  { layer: "Spot Flow", status: "ok", source: "Binance", quality: 0.88 },
-  { layer: "Derivatives", status: "ok", source: "Deribit", quality: 0.91 },
-  { layer: "News", status: "partial", source: "RSS aggregator", quality: 0.62 },
-  { layer: "On-chain", status: "ok", source: "Alchemy", quality: 0.85 },
-  { layer: "ETF Flow", status: "degraded", source: "ETF Parser", quality: 0.51 },
-  { layer: "Macro", status: "ok", source: "FRED", quality: 0.79 },
-];
-
-const apiLogs = [
-  { provider: "CoinGecko", endpoint: "/coins/markets", status: 200, latency: 412, created: "14:28:11" },
-  { provider: "Deribit", endpoint: "/public/get_book_summary", status: 200, latency: 318, created: "14:28:09" },
-  { provider: "RSS", endpoint: "/feed/crypto", status: 200, latency: 1842, created: "14:28:02" },
-  { provider: "ETF Parser", endpoint: "/etf/flows", status: 502, latency: 5000, created: "14:27:58", error: "upstream timeout" },
-  { provider: "Alchemy", endpoint: "/transfers", status: 200, latency: 287, created: "14:27:51" },
-  { provider: "FRED", endpoint: "/series/observations", status: 200, latency: 612, created: "14:27:44" },
-];
-
-const reportMarkdown = `# BTC 4h Market Scan
-
-## Summary
-BTC declined **-1.82%** in the past 4 hours, driven primarily by *long leverage flush* and weak spot demand.
-
-## Market Bias
-- Direction: **Bearish**
-- Risk Level: **High** (7 / 12)
-- Model Confidence: **Medium** (71%)
-
-## Key Drivers
-- Funding rate inverted to **-0.012%**
-- Open interest contracted **-8.4%**
-- Spot CVD turned negative (**-$142M**)
-
-## On-chain Context (BTC)
-| Event | Amount | Direction |
-|-------|--------|-----------|
-| Exchange inflow | 1,240 BTC | bearish |
-| Whale move | 830 BTC | neutral |
-
-## Disclaimer
-> Research-only output. Not financial advice.
-`;
+function riskLabel(value: string | null | undefined): string {
+  const label = formatLabel(value);
+  return label === "n/a" ? label : label.replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 // — Shared components —
 
@@ -222,31 +90,32 @@ function Pill({ label, color }: { label: string; color?: string }) {
   );
 }
 
-function DirBadge({ d }: { d: string }) {
+function DirBadge({ d }: { d: string | undefined }) {
+  const val = (d || "neutral").toLowerCase();
   const cls =
-    d === "bearish" ? "bg-red-100 text-red-700" :
-    d === "bullish" ? "bg-green-100 text-green-700" :
-    d === "outflow" ? "bg-green-100 text-green-700" :
-    d === "inflow" ? "bg-red-100 text-red-700" :
+    val === "bearish" || val === "outflow" ? "bg-red-100 text-red-700" :
+    val === "bullish" || val === "inflow" ? "bg-green-100 text-green-700" :
     "bg-slate-100 text-slate-600";
-  return <Pill label={d} color={cls} />;
+  return <Pill label={val} color={cls} />;
 }
 
-function ImpactBadge({ i }: { i: string }) {
+function ImpactBadge({ i }: { i: string | undefined }) {
+  const val = (i || "low").toLowerCase();
   const cls =
-    i === "high" ? "bg-red-100 text-red-700" :
-    i === "medium" ? "bg-orange-100 text-orange-700" :
+    val === "high" ? "bg-red-100 text-red-700" :
+    val === "medium" ? "bg-orange-100 text-orange-700" :
     "bg-slate-100 text-slate-600";
-  return <Pill label={i} color={cls} />;
+  return <Pill label={val} color={cls} />;
 }
 
 function StatusPill({ s }: { s: string }) {
+  const val = s.toLowerCase();
   const cls =
-    s === "ok" ? "bg-green-100 text-green-700" :
-    s === "partial" ? "bg-yellow-100 text-yellow-700" :
-    s === "degraded" ? "bg-orange-100 text-orange-700" :
+    val === "good" || val === "ok" ? "bg-green-100 text-green-700" :
+    val === "partial" ? "bg-yellow-100 text-yellow-700" :
+    val === "degraded" || val === "unavailable" ? "bg-orange-100 text-orange-700" :
     "bg-red-100 text-red-700";
-  return <Pill label={s} color={cls} />;
+  return <Pill label={val} color={cls} />;
 }
 
 function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
@@ -279,7 +148,89 @@ function CollapsibleCard({ title, children, defaultOpen = true }: { title: strin
 
 // — Tab content components —
 
-function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwitchTab: (t: DetailTab) => void; onOpenTrace?: () => void }) {
+function TabOverview({
+  asset,
+  report,
+  dashboardData,
+  onSwitchTab,
+  onOpenTrace,
+}: {
+  asset: string;
+  report: ResearchReport;
+  dashboardData: DashboardData | null;
+  onSwitchTab: (t: DetailTab) => void;
+  onOpenTrace?: () => void;
+}) {
+  const market = unwrapLayer<MarketData>(dashboardData, "market");
+  const risk = unwrapLayer<RiskData>(dashboardData, "risk");
+  const attribution = unwrapLayer<AttributionData>(dashboardData, "attribution");
+  const derivatives = unwrapLayer<DerivativesData>(dashboardData, "derivatives");
+
+  const metadata = report.metadata;
+  const price = market.price_now ?? metadata?.price_now ?? null;
+  const change4h = market.price_change_4h_pct ?? metadata?.price_change_4h_pct ?? null;
+  const change24h = market.price_change_24h_pct ?? metadata?.price_change_24h_pct ?? null;
+  const riskScore = risk.risk_score ?? metadata?.risk_score ?? null;
+  const riskLevel = risk.risk_level ?? metadata?.risk_level ?? "n/a";
+  const marketBias = market.direction || metadata?.direction || "neutral";
+  const dataQualityScore = attribution.overall_data_quality_score;
+
+  const primaryDrivers = attribution.primary_drivers || [];
+  const mainDriverName = primaryDrivers[0]?.driver || attribution.event_summary || "No confirmed driver";
+  const mainDriverExplanation = primaryDrivers[0]?.explanation || attribution.event_summary || "";
+
+  const updatedAt = metadata?.updated_at || report.createdAt;
+  const updatedLabel = updatedAt
+    ? new Date(updatedAt).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  const reportId = report.id.slice(0, 8);
+
+  // Build market snapshot rows from real data
+  const marketSnapshot: { label: string; value: string }[] = [
+    { label: "price_now", value: formatCurrency(price) },
+    { label: "price_change_1h_pct", value: formatPercent(market.price_change_1h_pct) },
+    { label: "price_change_4h_pct", value: formatPercent(change4h) },
+    { label: "price_change_24h_pct", value: formatPercent(change24h) },
+    { label: "price_change_7d_pct", value: formatPercent(market.price_change_7d_pct) },
+    { label: "volume_24h", value: formatCurrency(market.volume_24h, true) },
+    { label: "volume_ratio_vs_7d", value: market.volume_ratio_vs_7d ? `${formatNumber(market.volume_ratio_vs_7d)}x` : "n/a" },
+    { label: "market_cap", value: formatCurrency(market.market_cap, true) },
+    { label: "market_signal", value: formatLabel(market.market_signal) },
+    { label: "spot_turnover_24h", value: formatCurrency(market.spot_turnover_24h, true) },
+    { label: "spot_flow_bias", value: formatLabel(market.spot_flow_bias) },
+    { label: "spot_cvd_approx_4h", value: market.spot_cvd_approx_4h != null ? formatCurrency(market.spot_cvd_approx_4h, true) : "n/a" },
+    { label: "price_vs_ema20", value: formatLabel(market.price_vs_ema20) },
+    { label: "price_vs_ema50", value: formatLabel(market.price_vs_ema50) },
+    { label: "price_vs_ema200", value: formatLabel(market.price_vs_ema200) },
+  ];
+
+  // Build risk breakdown from real data
+  const riskBreakdownRaw = risk.risk_breakdown || {};
+  const riskMaxScore = risk.risk_max_score || 12;
+  const riskBreakdown = Object.keys(riskBreakdownRaw).length > 0
+    ? Object.entries(riskBreakdownRaw).map(([key, val]) => ({
+        label: formatLabel(key).replace(/\b\w/g, (c) => c.toUpperCase()),
+        value: val,
+        max: 3,
+      }))
+    : [
+        { label: "Liquidity", value: 0, max: 3 },
+        { label: "Leverage", value: 0, max: 3 },
+        { label: "News", value: 0, max: 2 },
+        { label: "On-chain", value: 0, max: 2 },
+        { label: "Macro", value: 0, max: 2 },
+      ];
+
+  // Build drivers from attribution
+  const allDrivers: Array<AttributionDriver & { type: string }> = [
+    ...(attribution.primary_drivers || []).map((d) => ({ ...d, type: "Primary" })),
+    ...(attribution.secondary_drivers || []).map((d) => ({ ...d, type: "Secondary" })),
+    ...(attribution.noise || []).map((n) => ({ driver: n.driver, explanation: n.reason, confidence: n.confidence, type: "Noise" })),
+  ].slice(0, 6);
+
+  const hasData = Boolean(dashboardData);
+
   return (
     <div className="space-y-4">
       {/* Hero summary */}
@@ -287,48 +238,56 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full" style={{ fontWeight: 600 }}>{asset}</span>
-            <span className="text-xs text-slate-500">4h Window · rpt_8a2f</span>
-            <span className="text-xs text-slate-400">Updated 14:28</span>
+            <span className="text-xs text-slate-500">{metadata?.time_window || "4h"} Window · {reportId}</span>
+            {updatedLabel && <span className="text-xs text-slate-400">Updated {updatedLabel}</span>}
           </div>
-          <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Partial Data</span>
+          <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">
+            {hasData ? "Live Data" : "No Dashboard Data"}
+          </span>
         </div>
 
         {/* Price */}
         <div className="flex flex-wrap items-end gap-4 mb-4">
-          <span className="text-4xl" style={{ fontWeight: 700 }}>$102,430</span>
+          <span className="text-4xl" style={{ fontWeight: 700 }}>{formatCurrency(price)}</span>
           <div className="pb-0.5">
-            <div className="text-sm text-red-500" style={{ fontWeight: 500 }}>▼ -1.82% (4h)</div>
-            <div className="text-xs text-red-400">▼ -2.71% (24h)</div>
+            <div className={`text-sm ${(change4h || 0) < 0 ? "text-red-500" : "text-green-600"}`} style={{ fontWeight: 500 }}>
+              {(change4h || 0) < 0 ? "▼" : "▲"} {formatPercent(change4h)} (4h)
+            </div>
+            <div className={`text-xs ${(change24h || 0) < 0 ? "text-red-400" : "text-green-500"}`}>
+              {(change24h || 0) < 0 ? "▼" : "▲"} {formatPercent(change24h)} (24h)
+            </div>
           </div>
         </div>
 
-        {/* Separated badges */}
+        {/* Badges */}
         <div className="flex flex-wrap gap-2 mb-4">
           <div className="flex items-center gap-1.5 bg-red-50 border border-red-100 rounded-lg px-3 py-1.5">
             <span className="text-xs text-slate-500">Market Bias</span>
-            <span className="text-xs text-red-700" style={{ fontWeight: 600 }}>Bearish</span>
+            <span className="text-xs text-red-700" style={{ fontWeight: 600 }}>{riskLabel(marketBias)}</span>
           </div>
           <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-100 rounded-lg px-3 py-1.5">
             <span className="text-xs text-slate-500">Risk Level</span>
-            <span className="text-xs text-orange-700" style={{ fontWeight: 600 }}>High · 7 / 12</span>
+            <span className="text-xs text-orange-700" style={{ fontWeight: 600 }}>{riskLabel(riskLevel)} · {riskScore ?? "n/a"} / {riskMaxScore}</span>
           </div>
           <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-slate-500">Confidence</span>
-            <span className="text-xs text-blue-700" style={{ fontWeight: 600 }}>Medium · 71%</span>
+            <span className="text-xs text-slate-500">Signals</span>
+            <span className="text-xs text-blue-700" style={{ fontWeight: 600 }}>{dashboardData?.normalized_signals?.length || 0}</span>
           </div>
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-slate-500">Data Quality</span>
-            <span className="text-xs text-slate-700" style={{ fontWeight: 600 }}>0.79 / Partial</span>
-          </div>
+          {dataQualityScore != null && (
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+              <span className="text-xs text-slate-500">Data Quality</span>
+              <span className="text-xs text-slate-700" style={{ fontWeight: 600 }}>{formatNumber(dataQualityScore)}</span>
+            </div>
+          )}
         </div>
 
         {/* Main driver */}
         <div className="bg-slate-50 rounded-lg p-3 mb-4">
           <div className="text-xs text-slate-400 mb-0.5">Main Driver</div>
-          <div className="text-sm text-slate-800" style={{ fontWeight: 600 }}>Long leverage flush + weak spot demand</div>
-          <p className="text-xs text-slate-500 mt-1">
-            Funding rate inverted and open interest contracted -8.4% during the 4h window, indicating forced long unwinding confirmed by spot CVD.
-          </p>
+          <div className="text-sm text-slate-800" style={{ fontWeight: 600 }}>{mainDriverName}</div>
+          {mainDriverExplanation && (
+            <p className="text-xs text-slate-500 mt-1 line-clamp-3">{mainDriverExplanation}</p>
+          )}
         </div>
 
         {/* Quick action buttons */}
@@ -362,26 +321,30 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
 
       {/* Market Snapshot */}
       <Card title="Market Snapshot">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
-          {marketSnapshot.map((m) => (
-            <div key={m.label} className="bg-slate-50 rounded-lg p-3 min-w-0">
-              <div className="text-slate-400 truncate">{labelForField(m.label)}</div>
-              <div className="text-slate-800 mt-1 truncate" style={{ fontWeight: 600 }}>{m.value}</div>
-            </div>
-          ))}
-        </div>
+        {hasData ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
+            {marketSnapshot.map((m) => (
+              <div key={m.label} className="bg-slate-50 rounded-lg p-3 min-w-0">
+                <div className="text-slate-400 truncate">{labelForField(m.label)}</div>
+                <div className="text-slate-800 mt-1 truncate" style={{ fontWeight: 600 }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400">No market snapshot data loaded.</p>
+        )}
       </Card>
 
       {/* Risk + Attribution */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card title="Risk Score">
           <div className="flex items-end gap-2 mb-2">
-            <span className="text-4xl" style={{ fontWeight: 700 }}>7</span>
-            <span className="text-slate-400 text-sm mb-1">/ 12</span>
-            <Pill label="elevated" color="bg-orange-100 text-orange-700" />
+            <span className="text-4xl" style={{ fontWeight: 700 }}>{riskScore ?? "n/a"}</span>
+            <span className="text-slate-400 text-sm mb-1">/ {riskMaxScore}</span>
+            <Pill label={riskLabel(riskLevel)} color={riskLevel === "high" ? "bg-red-100 text-red-700" : riskLevel === "medium" ? "bg-orange-100 text-orange-700" : "bg-green-100 text-green-700"} />
           </div>
           <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-4">
-            <div className="h-full bg-orange-400 rounded-full" style={{ width: "58%" }} />
+            <div className="h-full bg-orange-400 rounded-full" style={{ width: `${Math.min(100, ((riskScore || 0) / riskMaxScore) * 100)}%` }} />
           </div>
           <div className="space-y-2">
             {riskBreakdown.map((r) => (
@@ -396,9 +359,9 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
               </div>
             ))}
           </div>
-          <p className="text-xs text-slate-500 mt-3 leading-relaxed line-clamp-3">
-            Derivatives and spot flow are aligned. ETF drag confirms the move.
-          </p>
+          {risk.risk_summary && (
+            <p className="text-xs text-slate-500 mt-3 leading-relaxed line-clamp-3">{risk.risk_summary}</p>
+          )}
         </Card>
 
         <div className="lg:col-span-2">
@@ -410,28 +373,33 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
               </button>
             }
           >
-            <div className="bg-blue-50 rounded-lg p-3 mb-3 text-xs text-blue-800">
-              Long leverage flush + weak spot demand driving the {asset} 4h move.
-            </div>
+            {attribution.event_summary && (
+              <div className="bg-blue-50 rounded-lg p-3 mb-3 text-xs text-blue-800">
+                {attribution.event_summary}
+              </div>
+            )}
             <div className="space-y-3">
-              {drivers.map((d) => (
-                <div key={d.driver} className="border border-slate-100 rounded-lg p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                    <div className="flex items-center gap-2">
-                      <Pill label={d.type} color={d.color} />
-                      <span className="text-sm text-slate-800 truncate" style={{ fontWeight: 600 }}>{d.driver}</span>
+              {allDrivers.length > 0 ? allDrivers.map((d) => {
+                const typeColor = d.type === "Primary" ? "bg-blue-100 text-blue-700" : d.type === "Secondary" ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-600";
+                return (
+                  <div key={d.driver} className="border border-slate-100 rounded-lg p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2">
+                        <Pill label={d.type} color={typeColor} />
+                        <span className="text-sm text-slate-800 truncate" style={{ fontWeight: 600 }}>{d.driver || "Unnamed"}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                        {d.score != null && <><span>Score {formatNumber(d.score)}</span><span>·</span></>}
+                        {d.confidence != null && <><span>Conf {formatNumber(d.confidence)}</span><span>·</span></>}
+                        <DirBadge d={d.direction} />
+                      </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                      <span>Score {d.score}</span>
-                      <span>·</span>
-                      <span>Conf {d.confidence}</span>
-                      <span>·</span>
-                      <DirBadge d={d.direction} />
-                    </div>
+                    {d.explanation && <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{d.explanation}</p>}
                   </div>
-                  <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{d.explanation}</p>
-                </div>
-              ))}
+                );
+              }) : (
+                <p className="text-xs text-slate-400">No attribution drivers available.</p>
+              )}
             </div>
           </Card>
         </div>
@@ -440,8 +408,76 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
   );
 }
 
-function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; signalLayer: string; setSignalLayer: (l: string) => void }) {
+function TabEvidence({
+  asset,
+  dashboardData,
+  signalLayer,
+  setSignalLayer,
+}: {
+  asset: string;
+  dashboardData: DashboardData | null;
+  signalLayer: string;
+  setSignalLayer: (l: string) => void;
+}) {
+  const derivatives = unwrapLayer<DerivativesData>(dashboardData, "derivatives");
+  const news = unwrapLayer<NewsData>(dashboardData, "news");
+  const onchain = unwrapLayer<OnchainData>(dashboardData, "onchain");
+  const etf = unwrapLayer<ETFData>(dashboardData, "etf_flow");
+  const macro = unwrapLayer<MacroData>(dashboardData, "macro");
+
+  const signals: NormalizedSignal[] = dashboardData?.normalized_signals || [];
+  const layerNames = ["all", "derivatives", "market", "onchain", "news", "etf_flow", "macro", "risk"];
   const filteredSignals = signalLayer === "all" ? signals : signals.filter((s) => s.layer === signalLayer);
+
+  // Build derivatives display rows
+  const derivativesRows: { k: string; v: string }[] = [
+    { k: "provider", v: formatLabel(derivatives.provider || derivatives.symbol) },
+    { k: "symbol", v: derivatives.symbol || "n/a" },
+    { k: "funding_rate_now", v: formatPercent(derivatives.funding_rate_now) },
+    { k: "funding_rate_8h_ago", v: formatPercent(derivatives.funding_rate_8h_ago) },
+    { k: "funding_rate_change", v: formatPercent(derivatives.funding_rate_change) },
+    { k: "open_interest_now", v: formatCurrency(derivatives.open_interest_now, true) },
+    { k: "open_interest_change_24h_pct", v: formatPercent(derivatives.open_interest_change_24h_pct) },
+    { k: "mark_price", v: formatCurrency(derivatives.mark_price) },
+    { k: "basis_pct", v: formatPercent(derivatives.basis_pct) },
+    { k: "put_call_ratio", v: formatNumber(derivatives.put_call_ratio) },
+    { k: "put_call_volume_ratio", v: formatNumber(derivatives.put_call_volume_ratio) },
+    { k: "liquidation_bias", v: formatLabel(derivatives.liquidation_bias) },
+    { k: "long_liquidations_24h", v: formatCurrency(derivatives.long_liquidations_24h, true) },
+    { k: "short_liquidations_24h", v: formatCurrency(derivatives.short_liquidations_24h, true) },
+  ].filter((r) => r.v !== "n/a");
+
+  // News events
+  const newsEvents: NewsEvent[] = news.events || [];
+  // On-chain transfers
+  const transfers: LargeTransfer[] = onchain.large_transfers || [];
+
+  // ETF flow rows
+  const etfRows: { k: string; v: string }[] = [
+    { k: "btc_etf_net_flow_usd_m", v: etf.btc_etf_net_flow_usd_m != null ? `${etf.btc_etf_net_flow_usd_m}M` : formatNumber(etf.net_flow_usd_m_latest) },
+    { k: "flow_direction", v: formatLabel(etf.flow_direction) },
+    { k: "etf_flow_signal", v: formatLabel(etf.etf_flow_signal) },
+    { k: "flow_intensity", v: formatLabel(etf.flow_intensity) },
+    { k: "is_stale", v: etf.is_stale != null ? String(etf.is_stale) : "n/a" },
+    { k: "source", v: etf.source || "n/a" },
+  ];
+
+  // Macro rows
+  const macroRows: { k: string; v: string }[] = [
+    { k: "macro_signal", v: formatLabel(macro.macro_signal) },
+    { k: "macro_confidence", v: macro.macro_confidence || "n/a" },
+    { k: "macro_signal_evidence", v: (macro.macro_signal_evidence || []).join(", ") || "n/a" },
+    { k: "source", v: macro.source || "n/a" },
+  ];
+
+  // On-chain stats
+  const onchainStats = [
+    { k: "onchain_signal", v: formatLabel(onchain.onchain_signal) },
+    { k: "large_transfer_count", v: String(transfers.length) },
+    { k: "stablecoin_supply_change_24h", v: formatCurrency(onchain.stablecoin_supply_change_24h, true) },
+  ];
+
+  const hasData = Boolean(dashboardData);
 
   return (
     <div className="space-y-4">
@@ -450,7 +486,7 @@ function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; si
         title="Signal Matrix"
         action={
           <div className="flex flex-wrap gap-1">
-            {(["all", "derivatives", "market", "onchain", "news", "etf_flow", "macro"] as const).map((l) => (
+            {layerNames.map((l) => (
               <button
                 key={l}
                 onClick={() => setSignalLayer(l)}
@@ -462,154 +498,186 @@ function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; si
           </div>
         }
       >
-        <p className="text-xs text-slate-500 mb-3">
-          {asset} signals across all evidence layers. Bearish alignment is high across derivatives, market, and ETF data.
-        </p>
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-xs table-fixed min-w-[500px]">
-            <thead className="text-slate-400 border-b border-slate-100">
-              <tr>
-                <th className="text-left pb-2 w-[15%]" style={{ fontWeight: 400 }}>Layer</th>
-                <th className="text-left pb-2 w-[28%]" style={{ fontWeight: 400 }}>Signal</th>
-                <th className="text-left pb-2 w-[14%]" style={{ fontWeight: 400 }}>Value</th>
-                <th className="text-left pb-2 w-[13%]" style={{ fontWeight: 400 }}>Direction</th>
-                <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Impact</th>
-                <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Confidence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredSignals.map((s) => (
-                <tr key={s.name} className="border-b border-slate-50">
-                  <td className="py-2 text-slate-500 truncate pr-2">{s.layer}</td>
-                  <td className="py-2 text-slate-800 truncate pr-2">{s.name}</td>
-                  <td className="py-2 text-slate-700 truncate pr-2" style={{ fontWeight: 500 }}>{s.value}</td>
-                  <td className="py-2 pr-2"><DirBadge d={s.direction} /></td>
-                  <td className="py-2 pr-2"><ImpactBadge i={s.impact} /></td>
-                  <td className="py-2 text-slate-500 truncate">{s.confidence}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {hasData && signals.length > 0 ? (
+          <>
+            <p className="text-xs text-slate-500 mb-3">
+              {asset} signals across all evidence layers.
+            </p>
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-xs table-fixed min-w-[500px]">
+                <thead className="text-slate-400 border-b border-slate-100">
+                  <tr>
+                    <th className="text-left pb-2 w-[15%]" style={{ fontWeight: 400 }}>Layer</th>
+                    <th className="text-left pb-2 w-[28%]" style={{ fontWeight: 400 }}>Signal</th>
+                    <th className="text-left pb-2 w-[14%]" style={{ fontWeight: 400 }}>Value</th>
+                    <th className="text-left pb-2 w-[13%]" style={{ fontWeight: 400 }}>Direction</th>
+                    <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Impact</th>
+                    <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Confidence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSignals.map((s, i) => (
+                    <tr key={`${s.layer}-${s.signal_name}-${i}`} className="border-b border-slate-50">
+                      <td className="py-2 text-slate-500 truncate pr-2">{s.layer}</td>
+                      <td className="py-2 text-slate-800 truncate pr-2">{s.signal_name}</td>
+                      <td className="py-2 text-slate-700 truncate pr-2" style={{ fontWeight: 500 }}>{s.signal_value || "n/a"}</td>
+                      <td className="py-2 pr-2"><DirBadge d={s.direction} /></td>
+                      <td className="py-2 pr-2"><ImpactBadge i={s.impact_level} /></td>
+                      <td className="py-2 text-slate-500 truncate">{formatNumber(s.confidence)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-slate-400 py-4">No normalized signals available for this report.</p>
+        )}
       </Card>
 
       {/* Derivatives + News */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card title="Derivatives">
-          <p className="text-xs text-slate-500 mb-3">
-            Long-side liquidation pressure elevated. Funding rate inverted; open interest contracted 8.4%.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <tbody>
-                {derivativesData.map((d) => (
-                  <tr key={d.k} className="border-b border-slate-50">
-                    <td className="py-1.5 text-slate-400 pr-4 w-1/2">{labelForField(d.k)}</td>
-                    <td className="py-1.5 text-slate-700" style={{ fontWeight: 500 }}>{d.v}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {derivativesRows.length > 0 ? (
+            <>
+              <p className="text-xs text-slate-500 mb-3">
+                {formatLabel(derivatives.derivatives_signal)} · OI change {formatPercent(derivatives.open_interest_change_24h_pct)} · Liquidation bias: {formatLabel(derivatives.liquidation_bias)}
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {derivativesRows.map((d) => (
+                      <tr key={d.k} className="border-b border-slate-50">
+                        <td className="py-1.5 text-slate-400 pr-4 w-1/2">{labelForField(d.k)}</td>
+                        <td className="py-1.5 text-slate-700" style={{ fontWeight: 500 }}>{d.v}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-slate-400">No derivatives data available.</p>
+          )}
         </Card>
 
         <Card title="News Drivers">
-          <p className="text-xs text-slate-500 mb-3">
-            Macro and derivatives narratives dominated. ETF outflow stories supported the bearish sentiment.
-          </p>
-          <div className="space-y-3">
-            {newsEvents.map((n) => (
-              <div key={n.title} className="border-b border-slate-50 pb-2 last:border-0 min-w-0">
-                <a href={n.url} className="text-xs text-blue-600 hover:underline flex items-start gap-1">
-                  <span className="line-clamp-2">{n.title}</span>
-                  <ExternalLink size={10} className="mt-0.5 shrink-0" />
-                </a>
-                <div className="flex flex-wrap items-center gap-1.5 mt-1 text-xs">
-                  <span className="text-slate-400 truncate max-w-[80px]">{n.source}</span>
-                  <DirBadge d={n.direction} />
-                  <ImpactBadge i={n.impact} />
-                  <Pill label={n.category} />
-                </div>
-                <p className="text-xs text-slate-500 mt-1 line-clamp-2">{n.reason}</p>
+          {newsEvents.length > 0 ? (
+            <>
+              <p className="text-xs text-slate-500 mb-3">
+                {news.news_signal ? formatLabel(news.news_signal) : "News events"} · {newsEvents.length} events classified.
+              </p>
+              <div className="space-y-3">
+                {newsEvents.slice(0, 6).map((n, i) => (
+                  <div key={`${n.title}-${i}`} className="border-b border-slate-50 pb-2 last:border-0 min-w-0">
+                    <a href={n.url || "#"} className="text-xs text-blue-600 hover:underline flex items-start gap-1">
+                      <span className="line-clamp-2">{n.title || "Untitled"}</span>
+                      {n.url && <ExternalLink size={10} className="mt-0.5 shrink-0" />}
+                    </a>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1 text-xs">
+                      <span className="text-slate-400 truncate max-w-[80px]">{n.source || "unknown"}</span>
+                      <DirBadge d={n.direction} />
+                      <ImpactBadge i={n.impact_level} />
+                      <Pill label={n.category || "news"} />
+                    </div>
+                    {(n.summary || n.reason) && (
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{n.summary || n.reason}</p>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <p className="text-xs text-slate-400">No news events available for this report.</p>
+          )}
         </Card>
       </div>
 
       {/* On-chain + ETF Flow */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card title="On-chain (BTC context)">
+        <Card title={`On-chain (${asset} context)`}>
           <p className="text-xs text-slate-500 mb-3">
-            Moderate exchange inflows detected. No extreme whale accumulation signal.
+            {transfers.length > 0 ? `${transfers.length} large transfers detected.` : "No large transfers detected."}
           </p>
           <div className="grid grid-cols-3 gap-2 text-xs mb-3">
-            {[
-              { k: "onchain_signal", v: "bearish" },
-              { k: "large_transfer_count", v: "14" },
-              { k: "stable_supply_24h", v: "+$240M" },
-            ].map((item) => (
+            {onchainStats.map((item) => (
               <div key={item.k} className="bg-slate-50 rounded-lg p-2">
                 <div className="text-slate-400 truncate">{labelForField(item.k)}</div>
                 <div className="text-slate-800 mt-0.5 truncate" style={{ fontWeight: 600 }}>{item.v}</div>
               </div>
             ))}
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[320px]">
-              <thead className="text-slate-400 border-b border-slate-100">
-                <tr>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Tx Hash</th>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Amount</th>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>From → To</th>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Dir</th>
-                  <th className="text-left pb-1.5" style={{ fontWeight: 400 }}>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {largeTransfers.map((t) => (
-                  <tr key={t.hash} className="border-b border-slate-50">
-                    <td className="py-1.5 pr-2">
-                      <span className="text-slate-500 font-mono text-xs" title={t.hash}>{shortenHash(t.hash)}</span>
-                    </td>
-                    <td className="py-1.5 pr-2 text-slate-700 truncate" style={{ fontWeight: 500 }}>{t.amount}</td>
-                    <td className="py-1.5 pr-2 text-slate-500 text-xs max-w-[100px] truncate" title={`${t.from} → ${t.to}`}>{t.from} → {t.to}</td>
-                    <td className="py-1.5 pr-2"><DirBadge d={t.direction} /></td>
-                    <td className="py-1.5 text-slate-400 whitespace-nowrap">{t.ts}</td>
+          {transfers.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs min-w-[320px]">
+                <thead className="text-slate-400 border-b border-slate-100">
+                  <tr>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Tx Hash</th>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Amount</th>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>From → To</th>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Dir</th>
+                    <th className="text-left pb-1.5" style={{ fontWeight: 400 }}>Time</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {transfers.slice(0, 10).map((t, i) => (
+                    <tr key={`${t.hash}-${i}`} className="border-b border-slate-50">
+                      <td className="py-1.5 pr-2">
+                        <span className="text-slate-500 font-mono text-xs" title={t.hash}>{shortenHash(t.hash || "")}</span>
+                      </td>
+                      <td className="py-1.5 pr-2 text-slate-700 truncate" style={{ fontWeight: 500 }}>
+                        {formatNumber(t.amount, 4)} {asset}
+                      </td>
+                      <td className="py-1.5 pr-2 text-slate-500 text-xs max-w-[100px] truncate" title={`${t.from_label} → ${t.to_label}`}>
+                        {t.from_label || "?"} → {t.to_label || "?"}
+                      </td>
+                      <td className="py-1.5 pr-2"><DirBadge d={t.direction} /></td>
+                      <td className="py-1.5 text-slate-400 whitespace-nowrap">{t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400">No on-chain transfers in this snapshot.</p>
+          )}
         </Card>
 
         <div className="space-y-4">
           <Card title="ETF Flow">
             <p className="text-xs text-slate-500 mb-3">
-              Net outflow of $180M over 24h. Signal is bearish; data from Farside slightly stale.
+              {etfRows.some((r) => r.v !== "n/a") ? formatLabel(etf.flow_direction || etf.etf_flow_signal) : "No ETF flow data."}
             </p>
-            <div className="space-y-2 text-xs">
-              {etfFlowData.map((e) => (
-                <div key={e.k} className="flex justify-between border-b border-slate-50 py-1.5 gap-2">
-                  <span className="text-slate-400">{labelForField(e.k)}</span>
-                  <span className="text-slate-700 truncate text-right" style={{ fontWeight: 500 }}>{e.v}</span>
-                </div>
-              ))}
-            </div>
+            {etfRows.some((r) => r.v !== "n/a") ? (
+              <div className="space-y-2 text-xs">
+                {etfRows.map((e) => (
+                  <div key={e.k} className="flex justify-between border-b border-slate-50 py-1.5 gap-2">
+                    <span className="text-slate-400">{labelForField(e.k)}</span>
+                    <span className="text-slate-700 truncate text-right" style={{ fontWeight: 500 }}>{e.v}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">No ETF flow data available.</p>
+            )}
           </Card>
 
           <Card title="Macro Context">
             <p className="text-xs text-slate-500 mb-3">
-              Risk-off environment. DXY strengthened and US10Y rose, both consistent with the BTC decline.
+              {macro.macro_signal ? `Signal: ${formatLabel(macro.macro_signal)}. Confidence: ${macro.macro_confidence || "n/a"}.` : "No macro data available."}
             </p>
-            <div className="space-y-2 text-xs">
-              {macroData.map((m) => (
-                <div key={m.k} className="border-b border-slate-50 pb-2 last:border-0">
-                  <div className="text-slate-400">{labelForField(m.k)}</div>
-                  <div className="text-slate-700 mt-0.5 line-clamp-2" style={{ fontWeight: 500 }}>{m.v}</div>
-                </div>
-              ))}
-            </div>
+            {macroRows.some((r) => r.v !== "n/a") ? (
+              <div className="space-y-2 text-xs">
+                {macroRows.map((m) => (
+                  <div key={m.k} className="border-b border-slate-50 pb-2 last:border-0">
+                    <div className="text-slate-400">{labelForField(m.k)}</div>
+                    <div className="text-slate-700 mt-0.5 line-clamp-2" style={{ fontWeight: 500 }}>{m.v}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">No macro data available.</p>
+            )}
           </Card>
         </div>
       </div>
@@ -617,13 +685,41 @@ function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; si
   );
 }
 
-function TabDataQuality() {
-  const overall = (dataQuality.reduce((a, q) => a + q.quality, 0) / dataQuality.length).toFixed(2);
-  const okCount = dataQuality.filter((q) => q.status === "ok").length;
+function TabDataQuality({ dashboardData }: { dashboardData: DashboardData | null }) {
+  const attribution = unwrapLayer<AttributionData>(dashboardData, "attribution");
+  const market = unwrapLayer<MarketData>(dashboardData, "market");
+  const derivatives = unwrapLayer<DerivativesData>(dashboardData, "derivatives");
+  const news = unwrapLayer<NewsData>(dashboardData, "news");
+  const onchain = unwrapLayer<OnchainData>(dashboardData, "onchain");
+  const etf = unwrapLayer<ETFData>(dashboardData, "etf_flow");
+  const macro = unwrapLayer<MacroData>(dashboardData, "macro");
+
+  const sections = attribution.data_quality as Record<string, { status?: string; source?: string; missing_fields?: string[] }> | undefined;
+
+  // Fallback: build from individual layer data_quality fields
+  const dataQualityLayers = sections
+    ? Object.entries(sections).map(([layer, info]) => ({
+        layer: layer.charAt(0).toUpperCase() + layer.slice(1).replace(/_/g, " "),
+        status: info.status || "unknown",
+        source: info.source || "n/a",
+        quality: info.status === "good" ? 0.9 : info.status === "partial" ? 0.65 : info.status === "unavailable" ? 0.2 : 0.5,
+      }))
+    : [
+        { layer: "Market", status: market.data_quality ? "good" : "unknown", source: "market", quality: market.data_quality ? 0.9 : 0.3 },
+        { layer: "Derivatives", status: derivatives.data_quality ? "good" : "unknown", source: "derivatives", quality: derivatives.data_quality ? 0.85 : 0.3 },
+        { layer: "News", status: news.data_quality ? "good" : "unknown", source: "rss", quality: news.data_quality ? 0.7 : 0.3 },
+        { layer: "On-chain", status: onchain.data_quality ? "good" : "unknown", source: "onchain", quality: onchain.data_quality ? 0.75 : 0.3 },
+        { layer: "ETF Flow", status: etf.source ? "partial" : "unavailable", source: etf.source || "n/a", quality: etf.source ? 0.55 : 0.2 },
+        { layer: "Macro", status: macro.macro_signal ? "good" : "unavailable", source: macro.source || "n/a", quality: macro.macro_signal ? 0.75 : 0.2 },
+      ];
+
+  const overall = dataQualityLayers.length > 0
+    ? (dataQualityLayers.reduce((a, q) => a + q.quality, 0) / dataQualityLayers.length).toFixed(2)
+    : "0.00";
+  const okCount = dataQualityLayers.filter((q) => q.status === "good" || q.status === "ok").length;
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Overall Score</div>
@@ -631,11 +727,13 @@ function TabDataQuality() {
         </div>
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Healthy Layers</div>
-          <div className="text-2xl text-green-600" style={{ fontWeight: 700 }}>{okCount} / {dataQuality.length}</div>
+          <div className="text-2xl text-green-600" style={{ fontWeight: 700 }}>{okCount} / {dataQualityLayers.length}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Status</div>
-          <div className="text-sm text-yellow-700" style={{ fontWeight: 600 }}>Partial — ETF data degraded</div>
+          <div className="text-sm text-yellow-700" style={{ fontWeight: 600 }}>
+            {okCount === dataQualityLayers.length ? "All healthy" : okCount > dataQualityLayers.length / 2 ? "Partial" : "Degraded"}
+          </div>
         </div>
       </div>
 
@@ -651,7 +749,7 @@ function TabDataQuality() {
               </tr>
             </thead>
             <tbody>
-              {dataQuality.map((q) => (
+              {dataQualityLayers.map((q) => (
                 <tr key={q.layer} className="border-b border-slate-50">
                   <td className="py-2 pr-4 text-slate-700">{q.layer}</td>
                   <td className="py-2 pr-4"><StatusPill s={q.status} /></td>
@@ -674,13 +772,26 @@ function TabDataQuality() {
   );
 }
 
-function TabAPILogs({ logFilter, setLogFilter }: { logFilter: "all" | "errors"; setLogFilter: (f: "all" | "errors") => void }) {
-  const filteredLogs = logFilter === "errors" ? apiLogs.filter((l) => l.status >= 400) : apiLogs;
-  const errorCount = apiLogs.filter((l) => l.status >= 400).length;
+function TabAPILogs({
+  dashboardData,
+  logFilter,
+  setLogFilter,
+}: {
+  dashboardData: DashboardData | null;
+  logFilter: "all" | "errors";
+  setLogFilter: (f: "all" | "errors") => void;
+}) {
+  const apiLogs: ApiCallLog[] = dashboardData?.api_call_logs || [];
+  const filteredLogs = logFilter === "errors"
+    ? apiLogs.filter((l) => (l.status_code || 200) >= 400)
+    : apiLogs;
+  const errorCount = apiLogs.filter((l) => (l.status_code || 200) >= 400).length;
+  const avgLatency = apiLogs.length > 0
+    ? Math.round(apiLogs.reduce((a, l) => a + (l.latency_ms || 0), 0) / apiLogs.length)
+    : 0;
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Total API Calls</div>
@@ -692,9 +803,7 @@ function TabAPILogs({ logFilter, setLogFilter }: { logFilter: "all" | "errors"; 
         </div>
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Avg Latency</div>
-          <div className="text-2xl" style={{ fontWeight: 700 }}>
-            {Math.round(apiLogs.reduce((a, l) => a + l.latency, 0) / apiLogs.length)} ms
-          </div>
+          <div className="text-2xl" style={{ fontWeight: 700 }}>{avgLatency} ms</div>
         </div>
       </div>
 
@@ -717,37 +826,46 @@ function TabAPILogs({ logFilter, setLogFilter }: { logFilter: "all" | "errors"; 
           </div>
         }
       >
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-xs table-fixed min-w-[500px]">
-            <thead className="text-slate-400 border-b border-slate-100">
-              <tr>
-                <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Provider</th>
-                <th className="text-left pb-2 w-[28%]" style={{ fontWeight: 400 }}>Endpoint</th>
-                <th className="text-left pb-2 w-[10%]" style={{ fontWeight: 400 }}>Status</th>
-                <th className="text-left pb-2 w-[14%]" style={{ fontWeight: 400 }}>Latency</th>
-                <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Time</th>
-                <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredLogs.map((l, i) => (
-                <tr key={i} className="border-b border-slate-50">
-                  <td className="py-2 text-slate-700 truncate pr-2">{l.provider}</td>
-                  <td className="py-2 text-slate-500 truncate pr-2" title={l.endpoint}>{l.endpoint}</td>
-                  <td className="py-2 pr-2">
-                    <Pill
-                      label={String(l.status)}
-                      color={l.status >= 400 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}
-                    />
-                  </td>
-                  <td className="py-2 text-slate-600 truncate pr-2">{l.latency} ms</td>
-                  <td className="py-2 text-slate-400 truncate pr-2">{l.created}</td>
-                  <td className="py-2 text-red-500 truncate" title={l.error ?? ""}>{l.error ?? "—"}</td>
+        {apiLogs.length > 0 ? (
+          <div className="overflow-x-auto w-full">
+            <table className="w-full text-xs table-fixed min-w-[500px]">
+              <thead className="text-slate-400 border-b border-slate-100">
+                <tr>
+                  <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Provider</th>
+                  <th className="text-left pb-2 w-[28%]" style={{ fontWeight: 400 }}>Endpoint</th>
+                  <th className="text-left pb-2 w-[10%]" style={{ fontWeight: 400 }}>Status</th>
+                  <th className="text-left pb-2 w-[14%]" style={{ fontWeight: 400 }}>Latency</th>
+                  <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Time</th>
+                  <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Error</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filteredLogs.map((l, i) => {
+                  const statusCode = l.status_code || 0;
+                  return (
+                    <tr key={i} className="border-b border-slate-50">
+                      <td className="py-2 text-slate-700 truncate pr-2">{l.provider || "unknown"}</td>
+                      <td className="py-2 text-slate-500 truncate pr-2" title={l.endpoint}>{l.endpoint || "n/a"}</td>
+                      <td className="py-2 pr-2">
+                        <Pill
+                          label={String(statusCode)}
+                          color={statusCode >= 400 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}
+                        />
+                      </td>
+                      <td className="py-2 text-slate-600 truncate pr-2">{l.latency_ms != null ? `${l.latency_ms} ms` : "n/a"}</td>
+                      <td className="py-2 text-slate-400 truncate pr-2">
+                        {l.created_at ? new Date(l.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "n/a"}
+                      </td>
+                      <td className="py-2 text-red-500 truncate" title={l.error_message ?? ""}>{l.error_message || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 py-4">No API call logs recorded for this report.</p>
+        )}
       </Card>
     </div>
   );
@@ -768,8 +886,8 @@ function TabMarkdown({ copied, markdown, onCopy }: { copied: boolean; markdown: 
             <Download size={11} className="inline mr-1" />Download
           </button>
         </div>
-        <pre className="text-xs text-slate-700 bg-slate-50 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap" style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-          {markdown}
+        <pre className="text-xs text-slate-700 bg-slate-50 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap max-h-[600px] overflow-y-auto" style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
+          {markdown || "No markdown report available."}
         </pre>
       </CollapsibleCard>
     </div>
@@ -779,14 +897,8 @@ function TabMarkdown({ copied, markdown, onCopy }: { copied: boolean; markdown: 
 // — Main component —
 
 export function ReportDetail({
-  reportId = "rpt_8a2f",
-  asset = "BTC",
-  query,
-  reportMarkdown: liveReportMarkdown,
-  reportStatus,
-  riskScore,
-  riskLevel,
-  updatedAt,
+  report,
+  defaultAsset = "BTC",
   errorMessage,
   onBack,
   onOpenTrace,
@@ -795,11 +907,24 @@ export function ReportDetail({
   const [signalLayer, setSignalLayer] = useState<string>("all");
   const [logFilter, setLogFilter] = useState<"all" | "errors">("all");
   const [copied, setCopied] = useState(false);
-  const activeReportMarkdown = liveReportMarkdown || reportMarkdown;
-  const updatedLabel = updatedAt ? new Date(updatedAt).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : null;
+
+  const dashboardData = report?.dashboardData || null;
+  const metadata = report?.metadata;
+  const asset = metadata?.asset || defaultAsset;
+  const query = report?.query || `Analyze ${asset} market conditions.`;
+  const reportMarkdown = report?.reportMarkdown || "";
+  const reportStatus = metadata?.status;
+  const riskScore = metadata?.risk_score ?? undefined;
+  const riskLevel = metadata?.risk_level ?? undefined;
+  const updatedAt = metadata?.updated_at;
+  const reportId = report?.id || "n/a";
+
+  const updatedLabel = updatedAt
+    ? new Date(updatedAt).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : null;
 
   function handleCopy() {
-    navigator.clipboard?.writeText(activeReportMarkdown).catch(() => {});
+    navigator.clipboard?.writeText(reportMarkdown).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
@@ -817,14 +942,12 @@ export function ReportDetail({
               <ArrowLeft size={12} /> Back
             </button>
             <h1 className="text-2xl" style={{ fontWeight: 600 }}>Report Detail</h1>
-            <p className="text-sm text-slate-500 mt-0.5 line-clamp-2 max-w-xl">
-              {query ?? `Analyze why ${asset} dropped in the past 4 hours across market, derivatives, news, on-chain and macro context.`}
-            </p>
+            <p className="text-sm text-slate-500 mt-0.5 line-clamp-2 max-w-xl">{query}</p>
             <div className="flex flex-wrap gap-2 mt-2">
-              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{reportId}</span>
+              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{reportId.slice(0, 8)}</span>
               {reportStatus && <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{reportStatus}</span>}
               {riskScore !== undefined && <span className="text-xs bg-orange-50 text-orange-700 px-2 py-0.5 rounded">Risk {riskScore}</span>}
-              {riskLevel && <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{riskLevel}</span>}
+              {riskLevel && <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{riskLabel(riskLevel)}</span>}
               {updatedLabel && <span className="text-xs text-slate-400 px-2 py-0.5">Updated {updatedLabel}</span>}
             </div>
           </div>
@@ -869,22 +992,44 @@ export function ReportDetail({
       {/* Tab content */}
       <div className="p-6 space-y-4">
         {errorMessage && (
-          <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-4 text-xs">
+          <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-3 text-xs">
             {errorMessage}
           </div>
         )}
-        {activeTab === "overview" && (
-          <TabOverview asset={asset} onSwitchTab={setActiveTab} onOpenTrace={onOpenTrace} />
+        {!dashboardData && reportStatus === "completed" && (
+          <div className="bg-yellow-50 border border-yellow-100 text-yellow-700 rounded-xl p-3 text-xs">
+            Dashboard data is still loading or unavailable. Try refreshing.
+          </div>
+        )}
+        {activeTab === "overview" && report && (
+          <TabOverview
+            asset={asset}
+            report={report}
+            dashboardData={dashboardData}
+            onSwitchTab={setActiveTab}
+            onOpenTrace={onOpenTrace}
+          />
         )}
         {activeTab === "evidence" && (
-          <TabEvidence asset={asset} signalLayer={signalLayer} setSignalLayer={setSignalLayer} />
+          <TabEvidence
+            asset={asset}
+            dashboardData={dashboardData}
+            signalLayer={signalLayer}
+            setSignalLayer={setSignalLayer}
+          />
         )}
-        {activeTab === "dataquality" && <TabDataQuality />}
+        {activeTab === "dataquality" && (
+          <TabDataQuality dashboardData={dashboardData} />
+        )}
         {activeTab === "apilogs" && (
-          <TabAPILogs logFilter={logFilter} setLogFilter={setLogFilter} />
+          <TabAPILogs
+            dashboardData={dashboardData}
+            logFilter={logFilter}
+            setLogFilter={setLogFilter}
+          />
         )}
         {activeTab === "markdown" && (
-          <TabMarkdown copied={copied} markdown={activeReportMarkdown} onCopy={handleCopy} />
+          <TabMarkdown copied={copied} markdown={reportMarkdown} onCopy={handleCopy} />
         )}
 
         <div className="text-xs text-slate-400 text-center pb-2">
