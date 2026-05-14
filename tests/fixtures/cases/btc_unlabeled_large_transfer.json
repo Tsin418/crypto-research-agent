@@ -1,0 +1,12 @@
+{
+  "case_id": "btc_unlabeled_large_transfer",
+  "asset": "BTC",
+  "description": "Unlabeled large transfer cluster is secondary at most.",
+  "market": {"price_change_24h_pct": -3.0, "price_now": 80000, "volume_ratio_vs_7d": 1.0},
+  "derivatives": {},
+  "news": {"events": []},
+  "onchain": {"onchain_signal": "large_transfer_cluster", "onchain_evidence_quality": "weak", "onchain_primary_eligible": false, "large_transfer_count": 3, "exchange_inflow_count": 0},
+  "etf_flow": {},
+  "macro": {},
+  "expected": {"primary_contains": [], "must_not_primary": ["Large on-chain transfer activity"], "min_confidence": 0.3}
+}

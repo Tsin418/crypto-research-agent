@@ -1,0 +1,12 @@
+{
+  "case_id": "btc_macro_risk_off",
+  "asset": "BTC",
+  "description": "BTC drops in a broad cross-asset risk-off tape.",
+  "market": {"price_change_24h_pct": -3.0, "price_now": 80000, "volume_ratio_vs_7d": 1.0},
+  "derivatives": {},
+  "news": {"events": []},
+  "onchain": {"onchain_signal": "btc_onchain_data_limited", "onchain_evidence_quality": "unknown"},
+  "etf_flow": {},
+  "macro": {"macro_signal": "risk_off", "macro_confidence": "high", "macro_signal_evidence": ["QQQ/Nasdaq proxy fell 1.10%.", "VIX rose 8.60%."]},
+  "expected": {"primary_contains": ["Macro risk-off pressure"], "must_not_primary": [], "min_confidence": 0.55}
+}

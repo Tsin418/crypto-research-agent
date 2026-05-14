@@ -244,6 +244,23 @@ async def get_report_data(report_id: str) -> dict[str, Any]:
     }
 
 
+@app.get("/api/research/report/{report_id}/trace")
+async def get_report_trace(report_id: str) -> dict[str, Any]:
+    report = STORAGE.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    snapshots = STORAGE.get_snapshots(report_id)
+    attribution = snapshots.get("attribution", {}).get("data", {})
+    payload = attribution.get("data", attribution)
+    return {
+        "report_id": report_id,
+        "attribution_trace": payload.get("attribution_trace", []),
+        "trace_summary": payload.get("trace_summary", {}),
+        "data_quality": payload.get("data_quality", {}),
+        "alternative_explanations": payload.get("alternative_explanations", []),
+    }
+
+
 def main() -> None:
     print(f"Crypto Research Agent FastAPI backend running on http://{SETTINGS.host}:{SETTINGS.port}")
     print(f"SQLite database: {SETTINGS.db_path}")

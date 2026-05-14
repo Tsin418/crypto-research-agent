@@ -53,6 +53,9 @@ def _market_lines(context: ResearchContext) -> list[str]:
         f"- Stablecoin 24h Supply Change: {onchain.get('stablecoin_supply_change_24h')}",
         f"- On-chain Signal: {onchain.get('onchain_signal')}",
     ]
+    if context.macro:
+        macro = context.macro.data
+        lines.append(f"- Macro Signal: {macro.get('macro_signal')} ({macro.get('macro_confidence')})")
     return lines
 
 
@@ -79,6 +82,50 @@ def _evidence_quality_lines(context: ResearchContext) -> list[str]:
     if etf and (etf.get("flow_direction") == "unavailable" or etf.get("is_stale")):
         lines.append("- Data limitation: ETF flow data is unavailable or stale; this report does not treat ETF flows as confirmed evidence.")
     return lines
+
+
+def _driver_lines(item: dict, index: int) -> list[str]:
+    lines = [
+        f"### {index}. {item['driver']}",
+        f"- Confidence: {item.get('confidence')}",
+        f"- Causality level: {item.get('causality_level')}",
+        f"- Interpretation: {item.get('explanation')}",
+    ]
+    for label, key in (
+        ("Supporting evidence", "supporting_evidence"),
+        ("Counter-evidence", "counter_evidence"),
+        ("Missing evidence", "missing_evidence"),
+    ):
+        values = item.get(key) or []
+        if values:
+            lines.append(f"- {label}:")
+            lines.extend([f"  - {value}" for value in values[:4]])
+    return lines
+
+
+def _data_quality_lines(attr: dict) -> list[str]:
+    data_quality = attr.get("data_quality") or {}
+    lines = [f"- Overall score: {attr.get('overall_data_quality_score')}"]
+    for name, section in data_quality.items():
+        status = str(section.get("status", "unknown")).replace("_", " ").title()
+        missing = section.get("missing_fields") or []
+        detail = f" - {', '.join(missing[:2])}" if missing else ""
+        if section.get("stale"):
+            detail = f"{detail}; stale cache"
+        if section.get("approximate"):
+            detail = f"{detail}; approximate"
+        lines.append(f"- {name.replace('_', ' ').title()}: {status}{detail}")
+    return lines
+
+
+def _trace_summary_lines(attr: dict) -> list[str]:
+    summary = attr.get("trace_summary") or {}
+    return [
+        f"- {summary.get('candidates_evaluated', 0)} candidates evaluated.",
+        f"- {summary.get('promoted_to_primary', 0)} promoted to primary.",
+        f"- {summary.get('post_move_news_blocked', 0)} blocked from primary due to post-move timing.",
+        f"- {summary.get('downgraded_due_to_missing_data', 0)} downgraded or caveated due to missing data.",
+    ]
 
 
 def _factor_lines(context: ResearchContext) -> tuple[list[str], list[str]]:
@@ -141,22 +188,31 @@ def local_report(context: ResearchContext) -> str:
         lines.extend(["", "## Risk Score", *_risk_lines(risk)])
         lines.extend(["", "## Watchlist", "- Whether price holds EMA20/EMA50.", "- Whether derivatives positioning confirms or fades.", "- Whether relevant news flow changes direction."])
     else:
-        lines.extend(["", "## Primary Drivers"])
+        lines.extend(["", "## 1. Market Move Summary", attr["event_summary"]])
+        lines.extend(["", "## 2. Most Plausible Drivers"])
         for index, item in enumerate(attr["primary_drivers"], 1):
-            lines.extend([f"{index}. {item['driver']}", item["explanation"]])
-        lines.extend(["", "## Secondary Drivers"])
+            lines.extend(_driver_lines(item, index))
+        lines.extend(["", "## 3. Secondary Drivers"])
         if attr["secondary_drivers"]:
             for index, item in enumerate(attr["secondary_drivers"], 1):
-                lines.extend([f"{index}. {item['driver']}", item["explanation"]])
+                lines.extend(_driver_lines(item, index))
         else:
             lines.append("No secondary driver has enough evidence yet.")
+        lines.extend(["", "## 4. Alternative Explanations"])
+        if attr.get("alternative_explanations"):
+            for item in attr["alternative_explanations"]:
+                lines.append(f"- {item.get('explanation')} Why not primary: {item.get('why_not_primary')}")
+        else:
+            lines.append("- No material alternative explanation was supported by the current data.")
+        lines.extend(["", "## 5. Data Quality", *_data_quality_lines(attr)])
+        lines.extend(["", "## 6. Attribution Trace Summary", *_trace_summary_lines(attr)])
         lines.extend(["", "## Noise / Unsupported Claims"])
         if attr["noise"]:
             for index, item in enumerate(attr["noise"], 1):
                 lines.extend([f"{index}. {item['driver']}", item["reason"]])
         else:
             lines.append("No unsupported claim cluster was detected.")
-        lines.extend(["", "## Risk Score", *_risk_lines(risk)])
+        lines.extend(["", "## Risk Watch", *_risk_lines(risk)])
         lines.extend(["", "## Watchlist", "- Whether price reclaims or loses EMA20/EMA50.", "- Whether funding and open interest normalize.", "- Whether high-impact news continues in the same direction.", "- Whether large on-chain transfers or exchange inflows increase."])
 
     lines.extend(["", "## Data Limits"])
@@ -177,7 +233,7 @@ def local_report(context: ResearchContext) -> str:
 
 async def generate_report(context: ResearchContext, llm: DeepSeekClient) -> str:
     mode_instruction = {
-        "event_attribution": "Use TL;DR, Market Snapshot, Primary Drivers, Secondary Drivers, Noise / Unsupported Claims, Risk Score, Watchlist, Data Limits, Disclaimer.",
+        "event_attribution": "Use Market Move Summary, Most Plausible Drivers, Secondary Drivers, Alternative Explanations, Data Quality, Attribution Trace Summary, Risk Watch, Data Limits, Disclaimer.",
         "state_scan": "Use TL;DR, Market Snapshot, Bullish Factors, Bearish Factors, Risk Score, Watchlist, Data Limits, Disclaimer. Do not force Primary/Secondary/Noise sections.",
         "risk_watch": "Use TL;DR, Market Snapshot, Risk Score, Key Risks, Watchlist, Data Limits, Disclaimer. Make Risk Score the center of the report.",
     }.get(context.intent.mode, "Use the standard research report format.")

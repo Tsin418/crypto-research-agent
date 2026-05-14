@@ -1,0 +1,12 @@
+{
+  "case_id": "btc_post_move_news_commentary",
+  "asset": "BTC",
+  "description": "Post-move bearish commentary should not be primary.",
+  "market": {"price_change_24h_pct": -4.0, "price_now": 80000, "volume_ratio_vs_7d": 1.0},
+  "derivatives": {},
+  "news": {"events": [{"title": "Post-move market commentary", "published_at": "2999-01-01T00:00:00Z", "direction": "bearish", "impact_level": "high", "asset_related": ["BTC"], "category": "market_commentary", "source_weight": 0.7, "category_prior": 0.4}]},
+  "onchain": {"onchain_signal": "btc_onchain_data_limited", "onchain_evidence_quality": "unknown"},
+  "etf_flow": {},
+  "macro": {},
+  "expected": {"primary_contains": [], "must_not_primary": ["Market Commentary: Post-move market commentary"], "min_confidence": 0.3}
+}

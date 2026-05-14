@@ -10,6 +10,7 @@ from backend.config import Settings
 from backend.data_derivatives import fetch_derivatives
 from backend.data_etf import fetch_etf_flow
 from backend.data_history import enrich_with_history, save_layer_metric_snapshots
+from backend.data_macro import fetch_macro_context
 from backend.data_market import fetch_4h_market_snapshot, fetch_market
 from backend.data_news import fetch_news
 from backend.data_onchain import fetch_onchain
@@ -77,6 +78,7 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         onchain_task,
     )
     etf = await fetch_etf_flow(asset, news=news.data)
+    macro = await fetch_macro_context(settings, market.data.get("price_change_24h_pct"))
     merged_market = {
         **market.data,
         **{key: value for key, value in market_4h.data.items() if value is not None},
@@ -92,7 +94,7 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         errors=[*market_4h.errors, *market.errors],
     )
     risk = compute_risk(market_layer.data, derivatives.data, news.data, onchain.data)
-    attribution = build_attribution(asset, market_layer.data, derivatives.data, news.data, onchain.data, etf.data)
+    attribution = build_attribution(asset, market_layer.data, derivatives.data, news.data, onchain.data, etf.data, macro.data)
     request = ReportRequest(query=f"{asset} 过去4小时中文市场研究", asset=asset, time_window=time_window)
     return ResearchContext(
         request=request,
@@ -102,6 +104,7 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         news=news,
         onchain=onchain,
         etf=etf,
+        macro=macro,
         risk=risk,
         attribution=attribution,
     )
@@ -115,7 +118,7 @@ async def _generate_asset_report(settings: Settings, storage: Storage, asset: st
     try:
         llm = DeepSeekClient(settings)
         context = await _build_auto_context(settings, storage, asset, time_window)
-        for layer in (context.market, context.derivatives, context.news, context.onchain, context.etf):
+        for layer in (context.market, context.derivatives, context.news, context.onchain, context.etf, context.macro):
             if layer is None:
                 continue
             storage.save_snapshot(

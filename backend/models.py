@@ -65,6 +65,7 @@ class ResearchContext(BaseModel):
     news: LayerResult
     onchain: LayerResult
     etf: LayerResult | None = None
+    macro: LayerResult | None = None
     risk: dict[str, Any]
     attribution: dict[str, Any]
 

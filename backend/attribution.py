@@ -69,6 +69,8 @@ def _source_quality(source_type: str, evidence: list[str]) -> float:
         return 0.8
     if source_type == "etf_flow":
         return 0.8 if "news_fallback" not in evidence else 0.5
+    if source_type == "macro":
+        return 0.7
     if source_type == "onchain":
         return 0.6 if "address_labels" in evidence else 0.4
     return 0.6
@@ -114,6 +116,8 @@ def _data_completeness(candidate: dict[str, Any]) -> float:
     elif source_type == "onchain":
         required = ("driver", "direction", "source_quality", "score")
     elif source_type == "etf_flow":
+        required = ("driver", "direction", "source_quality", "score")
+    elif source_type == "macro":
         required = ("driver", "direction", "source_quality", "score")
     else:
         required = ("driver", "score")
@@ -202,6 +206,7 @@ def _build_candidate(
         "score": score,
         "primary_eligible": primary_eligible,
         "source_type": source_type,
+        "source_layer": source_type,
         "source_quality": _source_quality(source_type, evidence),
         "direction": direction,
         "cross_layer_confirmation": _cross_layer_confirmation(
@@ -235,6 +240,92 @@ def _history_bonus(layer_data: dict[str, Any], metric_name: str) -> tuple[float,
     if z_value is not None and abs(z_value) >= 2:
         return 0.7, f"{metric_name} has an elevated local z-score."
     return 0.0, None
+
+
+def _status_from_missing(missing_fields: list[str], *, unavailable: bool = False, stale: bool = False) -> str:
+    if unavailable:
+        return "unavailable"
+    if stale:
+        return "partial"
+    return "partial" if missing_fields else "good"
+
+
+def build_data_quality(
+    market: dict,
+    derivatives: dict,
+    news: dict,
+    onchain: dict,
+    etf: dict,
+    macro: dict,
+) -> dict[str, Any]:
+    spot_flow_unavailable = market.get("spot_flow_bias") in {None, "unavailable"}
+    sections = {
+        "market": {
+            "status": _status_from_missing(
+                [field for field in ("price_now", "price_change_24h_pct", "volume_ratio_vs_7d") if market.get(field) is None],
+            ),
+            "source": market.get("spot_turnover_source") or "market_public_apis",
+            "missing_fields": [field for field in ("price_now", "price_change_24h_pct", "volume_ratio_vs_7d") if market.get(field) is None],
+            "stale": False,
+        },
+        "spot_flow": {
+            "status": "unavailable" if spot_flow_unavailable else "partial",
+            "source": market.get("provider") or "public_trades",
+            "missing_fields": ["full exchange-wide CVD"] + (["public trade CVD"] if spot_flow_unavailable else []),
+            "stale": False,
+            "approximate": True,
+        },
+        "derivatives": {
+            "status": _status_from_missing(
+                [field for field in ("funding_rate_now", "open_interest_change_24h_pct", "long_liquidations_24h", "short_liquidations_24h") if derivatives.get(field) is None],
+            ),
+            "source": derivatives.get("source_note") or "derivatives_public_apis",
+            "missing_fields": [field for field in ("funding_rate_now", "open_interest_change_24h_pct", "long_liquidations_24h", "short_liquidations_24h") if derivatives.get(field) is None],
+        },
+        "news": {
+            "status": "good" if news.get("events") else "partial",
+            "source": "rss",
+            "missing_fields": [] if news.get("events") else ["high-confidence recent news events"],
+        },
+        "onchain": {
+            "status": "partial" if onchain.get("onchain_evidence_quality") in {"weak", "unknown", None} else "good",
+            "source": "mempool.space/alchemy/etherscan",
+            "missing_fields": ["full exchange netflow"] if onchain.get("exchange_netflow_24h") is None else [],
+            "wallet_label_coverage": "limited",
+        },
+        "etf_flow": {
+            "status": _status_from_missing(["direct ETF flow"] if etf.get("flow_direction") == "unavailable" else [], unavailable=etf.get("flow_direction") == "unavailable", stale=bool(etf.get("is_stale"))),
+            "source": etf.get("source") or "unavailable",
+            "missing_fields": ["same-day ETF flow"] if etf.get("is_stale") else ([] if etf.get("flow_direction") != "unavailable" else ["ETF flow"]),
+            "stale": bool(etf.get("is_stale")),
+        },
+        "macro": {
+            "status": "unavailable" if macro.get("macro_signal") == "unavailable" else ("good" if macro.get("macro_confidence") == "high" else "partial"),
+            "source": macro.get("source") or "stooq",
+            "missing_fields": [] if macro.get("macro_signal") != "unavailable" else ["cross-asset macro inputs"],
+        },
+    }
+    weights = {
+        "market": 0.20,
+        "spot_flow": 0.10,
+        "derivatives": 0.20,
+        "news": 0.15,
+        "onchain": 0.10,
+        "etf_flow": 0.10,
+        "macro": 0.15,
+    }
+    values = {"good": 1.0, "partial": 0.6, "unavailable": 0.0}
+    score = sum(weights[name] * values.get(section["status"], 0.6) for name, section in sections.items())
+    return {"sections": sections, "overall_data_quality_score": round(score, 2)}
+
+
+def _apply_data_quality_to_confidence(items: list[dict[str, Any]], overall_score: float) -> None:
+    if overall_score >= 0.75:
+        return
+    penalty = min(0.08, (0.75 - overall_score) * 0.2)
+    for item in items:
+        item["confidence"] = round(max(0.30, item.get("confidence", 0.3) - penalty), 2)
+        item.setdefault("confidence_breakdown", {})["data_quality_adjustment"] = round(-penalty, 2)
 
 
 def classify_derivatives_regime(
@@ -480,7 +571,121 @@ def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, on
     return candidates, noise
 
 
-def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None) -> dict:
+def _macro_candidate(asset: str, market_change: float | None, macro: dict, market: dict, derivatives: dict, onchain: dict) -> dict[str, Any] | None:
+    signal = macro.get("macro_signal")
+    confidence = macro.get("macro_confidence", "low")
+    evidence = macro.get("macro_signal_evidence") or []
+    if signal not in {"risk_off", "dollar_pressure", "rates_pressure", "risk_on"}:
+        return None
+    price_direction = _price_direction(market_change)
+    labels = {
+        "risk_off": ("Macro risk-off pressure", "bearish", 2.2),
+        "dollar_pressure": ("Dollar strength pressure", "bearish", 2.0),
+        "rates_pressure": ("Rates-driven risk asset pressure", "bearish", 2.1),
+        "risk_on": ("Cross-asset risk-on support", "bullish", 2.1),
+    }
+    name, direction, base_score = labels[signal]
+    aligned = direction == price_direction
+    primary_eligible = aligned and confidence == "high"
+    supporting = list(evidence) or ["Macro cross-asset data is available."]
+    counter = [] if aligned else ["Macro signal direction is not aligned with the crypto price move."]
+    if confidence == "medium":
+        supporting.append("Macro confidence is medium, so this is treated conservatively.")
+    return _build_candidate(
+        name=name,
+        evidence=["macro_cross_asset"],
+        explanation=f"Cross-asset inputs are consistent with {signal.replace('_', ' ')} conditions; this may explain part of the {asset} move when aligned with price.",
+        score=base_score + (0.2 if aligned and confidence == "high" else 0.0),
+        source_type="macro",
+        direction=direction,
+        supporting_evidence=supporting,
+        counter_evidence=counter,
+        missing_evidence=[] if confidence != "low" else ["Macro confirmation is low confidence."],
+        primary_eligible=primary_eligible,
+        market=market,
+        derivatives=derivatives,
+        onchain=onchain,
+        extra={"macro_signal": signal, "macro_confidence": confidence},
+    )
+
+
+def _candidate_trace(candidate: dict[str, Any], classification: str, reason: str, index: int) -> dict[str, Any]:
+    adjustments = []
+    if candidate.get("causal_timing"):
+        adjustments.append({"name": f"timing_{candidate['causal_timing']}", "value": TIMING_SCORE.get(candidate["causal_timing"], 0), "reason": "News timing adjustment."})
+    if candidate.get("source_weight") is not None:
+        adjustments.append({"name": "source_weight", "value": round(candidate.get("source_weight", 1.0) - 1.0, 2), "reason": "News source credibility adjustment."})
+    if candidate.get("category_prior") is not None:
+        adjustments.append({"name": "category_prior", "value": round(candidate.get("category_prior", 1.0) - 1.0, 2), "reason": "News category prior adjustment."})
+    if candidate.get("counter_evidence"):
+        adjustments.append({"name": "counter_evidence_penalty", "value": -candidate["confidence_breakdown"].get("counter_evidence_penalty", 0), "reason": "Counter-evidence reduces confidence."})
+    if candidate.get("missing_evidence"):
+        adjustments.append({"name": "missing_evidence", "value": -0.1, "reason": "Missing evidence disclosed for this candidate."})
+    if not adjustments:
+        adjustments.append({"name": "rule_score", "value": candidate.get("score", 0), "reason": "Deterministic rule score."})
+    return {
+        "candidate_id": f"{candidate.get('source_layer', 'candidate')}_{index:03d}",
+        "driver": candidate["driver"],
+        "source_layer": candidate.get("source_layer", "unknown"),
+        "raw_score": candidate.get("score"),
+        "adjustments": adjustments,
+        "final_score": candidate.get("score"),
+        "primary_eligible": candidate.get("primary_eligible", True),
+        "classification": classification,
+        "classification_reason": reason,
+    }
+
+
+def _classification_reason(item: dict[str, Any], classification: str) -> str:
+    if classification == "primary":
+        return "Score, evidence, eligibility, and causality level met primary-driver thresholds."
+    if item.get("causal_timing") == "after_move":
+        return "Post-move news cannot be primary without stronger confirmation."
+    if not item.get("primary_eligible", True):
+        return "Candidate was blocked from primary by eligibility rules."
+    if item.get("causality_level") not in {"confirmed", "plausible"}:
+        return "Candidate evidence is too weak for primary classification."
+    return "Candidate had enough evidence for secondary context but not primary ranking."
+
+
+def _alternative_explanations(primary: list[dict[str, Any]], secondary: list[dict[str, Any]], derivatives: dict, etf: dict, macro: dict, onchain: dict) -> list[dict[str, Any]]:
+    alternatives: list[dict[str, Any]] = []
+    top = primary[0]["driver"] if primary else ""
+    macro_signal = macro.get("macro_signal")
+    if macro_signal in {"risk_off", "dollar_pressure", "rates_pressure"} and not top.startswith(("Macro", "Dollar", "Rates")):
+        alternatives.append({
+            "explanation": "Macro pressure may explain part of the move.",
+            "supporting_evidence": macro.get("macro_signal_evidence") or ["Macro signal is directionally aligned."],
+            "why_not_primary": "Crypto-native evidence ranked stronger in the current attribution output.",
+        })
+    if top.startswith(("Regulation", "Macro", "Spot")) and (derivatives.get("open_interest_change_24h_pct") is None or derivatives.get("long_liquidations_24h") is None):
+        alternatives.append({
+            "explanation": "Derivatives positioning cannot be ruled out.",
+            "supporting_evidence": ["Open interest or liquidation data is missing."],
+            "why_not_primary": "The derivatives layer lacks enough complete evidence.",
+        })
+    if top.startswith("Spot") and (etf.get("flow_direction") == "unavailable" or etf.get("is_stale")):
+        alternatives.append({
+            "explanation": "ETF flow pressure cannot be confirmed.",
+            "supporting_evidence": ["ETF flow data is missing or stale."],
+            "why_not_primary": "ETF flow was not available as confirmed same-day evidence.",
+        })
+    if onchain.get("onchain_evidence_quality") == "weak":
+        alternatives.append({
+            "explanation": "Large transfers may reflect wallet maintenance, custody movement, OTC settlement, or internal reshuffling.",
+            "supporting_evidence": ["Wallet label coverage is limited."],
+            "why_not_primary": "Unlabeled large transfers do not confirm directional sell pressure.",
+        })
+    if not alternatives and secondary:
+        alternatives.append({
+            "explanation": f"{secondary[0]['driver']} remains a possible secondary explanation.",
+            "supporting_evidence": secondary[0].get("supporting_evidence", [])[:2],
+            "why_not_primary": _classification_reason(secondary[0], "secondary"),
+        })
+    return alternatives[:4]
+
+
+def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None, macro: dict | None = None) -> dict:
     candidates: list[dict] = []
     noise: list[dict] = []
     now_utc = datetime.now(UTC)
@@ -494,6 +699,7 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
     )
 
     etf = etf or {}
+    macro = macro or {}
 
     if market_change is not None and abs(market_change) >= PRICE_MOVE_THRESHOLD:
         supporting = ["24h price move exceeded 2%."]
@@ -654,6 +860,10 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
                 )
             )
 
+    macro_candidate = _macro_candidate(asset, market_change, macro, market, derivatives, onchain)
+    if macro_candidate is not None:
+        candidates.append(macro_candidate)
+
     put_call = derivatives.get("put_call_ratio")
     if put_call is not None and put_call >= 1.2:
         candidates.append(
@@ -766,6 +976,20 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
         )
 
     all_ranked = primary + secondary
+    data_quality = build_data_quality(market, derivatives, news, onchain, etf, macro)
+    _apply_data_quality_to_confidence(all_ranked, data_quality["overall_data_quality_score"])
+    trace: list[dict[str, Any]] = []
+    for index, item in enumerate(primary, 1):
+        trace.append(_candidate_trace(item, "primary", _classification_reason(item, "primary"), index))
+    for index, item in enumerate(secondary, len(trace) + 1):
+        trace.append(_candidate_trace(item, "secondary", _classification_reason(item, "secondary"), index))
+    primary_names = {item["driver"] for item in primary}
+    secondary_names = {item["driver"] for item in secondary}
+    for index, item in enumerate(candidates, len(trace) + 1):
+        if item["driver"] in primary_names or item["driver"] in secondary_names:
+            continue
+        trace.append(_candidate_trace(item, "not_ranked", "Candidate did not meet ranking threshold or was outranked.", index))
+    alternatives = _alternative_explanations(primary, secondary, derivatives, etf, macro, onchain)
     quality = {
         "has_primary_with_evidence": all(bool(item.get("evidence")) for item in primary),
         "candidate_count": len(candidates),
@@ -775,10 +999,21 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
         "post_move_news_promoted": any(item.get("causal_timing") == "after_move" for item in primary),
         "derivatives_regime_available": any("derivatives_regime" in item for item in all_ranked),
     }
+    trace_summary = {
+        "candidates_evaluated": len(candidates),
+        "promoted_to_primary": len([item for item in primary if item["driver"] != "Insufficient confirmed evidence"]),
+        "post_move_news_blocked": len([item for item in candidates if item.get("causal_timing") == "after_move" and not item.get("primary_eligible", True)]),
+        "downgraded_due_to_missing_data": len([item for item in candidates if item.get("missing_evidence")]),
+    }
     return {
         "event_summary": event_summary,
         "primary_drivers": primary,
         "secondary_drivers": secondary,
         "noise": noise[:6],
         "quality_check": quality,
+        "alternative_explanations": alternatives,
+        "data_quality": data_quality["sections"],
+        "overall_data_quality_score": data_quality["overall_data_quality_score"],
+        "attribution_trace": trace,
+        "trace_summary": trace_summary,
     }

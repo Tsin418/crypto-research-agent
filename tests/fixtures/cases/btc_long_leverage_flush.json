@@ -1,0 +1,12 @@
+{
+  "case_id": "btc_long_leverage_flush",
+  "asset": "BTC",
+  "description": "BTC drops with OI decline and long liquidation dominance.",
+  "market": {"price_change_24h_pct": -5.0, "price_now": 80000, "volume_ratio_vs_7d": 1.1},
+  "derivatives": {"open_interest_change_24h_pct": -8.0, "funding_rate_now": 0.0002, "funding_rate_change": 0.0001, "long_liquidations_24h": 30.0, "short_liquidations_24h": 5.0},
+  "news": {"events": []},
+  "onchain": {"onchain_signal": "btc_onchain_data_limited", "onchain_evidence_quality": "unknown"},
+  "etf_flow": {},
+  "macro": {},
+  "expected": {"primary_contains": ["Long leverage flush"], "must_not_primary": [], "min_confidence": 0.6}
+}

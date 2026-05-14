@@ -1,0 +1,12 @@
+{
+  "case_id": "no_strong_evidence",
+  "asset": "BTC",
+  "description": "No strong evidence should produce insufficient confirmed evidence.",
+  "market": {"price_change_24h_pct": 0.4, "price_now": 80000, "volume_ratio_vs_7d": 1.0},
+  "derivatives": {},
+  "news": {"events": []},
+  "onchain": {"onchain_signal": "btc_onchain_data_limited", "onchain_evidence_quality": "unknown"},
+  "etf_flow": {},
+  "macro": {},
+  "expected": {"primary_contains": ["Insufficient confirmed evidence"], "must_not_primary": [], "min_confidence": 0.3}
+}

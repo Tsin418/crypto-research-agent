@@ -1,0 +1,12 @@
+{
+  "case_id": "btc_etf_outflow_pressure",
+  "asset": "BTC",
+  "description": "BTC drops while ETF outflows are high.",
+  "market": {"price_change_24h_pct": -3.0, "price_now": 80000, "volume_ratio_vs_7d": 1.0, "spot_flow_bias": "unavailable"},
+  "derivatives": {},
+  "news": {"events": []},
+  "onchain": {"onchain_signal": "btc_onchain_data_limited", "onchain_evidence_quality": "unknown"},
+  "etf_flow": {"flow_direction": "outflow", "flow_intensity": "high", "source": "farside_best_effort_html", "is_stale": false},
+  "macro": {},
+  "expected": {"primary_contains": ["Spot ETF outflow pressure"], "must_not_primary": [], "min_confidence": 0.55}
+}
