@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from backend.config import Settings
+from backend.data_quality import layer_quality, metric_meta
 from backend.data_spot_flow import fetch_spot_flow
 from backend.http_client import get_json, is_http_forbidden_error
 from backend.models import LayerResult
@@ -498,4 +499,33 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
         merged["note"] = " ".join(notes)
     elif merged.get("volume_7d_avg") is None:
         merged["note"] = "EMA/7d volume use CoinGecko market chart when available, with Bybit only as an optional last-resort fallback."
+    quality_warnings = []
+    if errors:
+        quality_warnings.append("Some market providers failed or returned incomplete data.")
+    if merged.get("spot_flow_bias") == "unavailable":
+        quality_warnings.append("Spot CVD approximation is unavailable; do not infer trade-side flow.")
+    elif merged.get("spot_cvd_approx_4h") is not None:
+        quality_warnings.append("Spot CVD is an approximation from public trades, not exact exchange-wide CVD.")
+    if merged.get("volume_ratio_vs_7d") is None:
+        quality_warnings.append("Volume ratio versus 7d average is unavailable.")
+    merged["data_quality"] = layer_quality(
+        freshness="fresh" if merged.get("price_now") is not None else "unknown",
+        confidence="high" if merged.get("price_now") is not None and merged.get("price_change_24h_pct") is not None else "low",
+        methodology="Public market APIs with fallback providers; EMA and volume context use market chart data when available.",
+        warnings=quality_warnings,
+    )
+    if "spot_cvd_approx_1h" in merged:
+        merged["spot_cvd_approx_1h_meta"] = metric_meta(
+            methodology="Public-trade signed-flow approximation, not true exchange-wide CVD.",
+            confidence=0.45 if merged.get("spot_cvd_approx_1h") is not None else 0.2,
+            source=merged.get("provider") or "public_trades",
+            warning="Do not describe as exact CVD.",
+        )
+    if "spot_cvd_approx_4h" in merged:
+        merged["spot_cvd_approx_4h_meta"] = metric_meta(
+            methodology="Current public-trade sample reused as a short-window CVD proxy, not exact 4h CVD.",
+            confidence=0.4 if merged.get("spot_cvd_approx_4h") is not None else 0.2,
+            source=merged.get("provider") or "public_trades",
+            warning="Do not describe as exact CVD.",
+        )
     return LayerResult(layer="market", source=source, data=merged, errors=errors)

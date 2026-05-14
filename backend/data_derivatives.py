@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from backend.config import Settings
+from backend.data_quality import layer_quality, metric_meta
 from backend.http_client import get_json, is_http_forbidden_error, post_json
 from backend.data_options import fetch_deribit_put_call
 from backend.models import LayerResult
@@ -752,4 +753,32 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
     if local_long_liq or local_short_liq:
         source_parts.append("local_liquidations")
     source = "/".join(source_parts) or "deribit/local_liquidations"
+    data["data_quality"] = layer_quality(
+        freshness="fresh" if any_provider_available or local_long_liq or local_short_liq else "unknown",
+        confidence="medium" if any_provider_available else "low",
+        methodology="Free public derivatives APIs plus locally tracked liquidation events; provider units may differ and are normalized best effort.",
+        warnings=[
+            "Tracked liquidation, not full-market liquidation.",
+            "Open interest changes can mix provider units and fallback coverage.",
+            *(["Some derivatives providers failed or returned incomplete data."] if errors else []),
+        ],
+    )
+    data["open_interest_change_24h_pct_meta"] = metric_meta(
+        methodology="Best-effort 24h open interest change from the first available public provider.",
+        confidence=0.65 if merged_oi_change is not None else 0.25,
+        source=source,
+        warning="Open interest units and venue coverage can differ across providers.",
+    )
+    data["long_liquidations_24h_meta"] = metric_meta(
+        methodology="Coinalyze liquidation history when available, otherwise locally tracked Bybit liquidation collector totals.",
+        confidence=0.55 if long_liq is not None else 0.2,
+        source="coinalyze_or_local_liquidations",
+        warning="Tracked liquidation, not full-market liquidation.",
+    )
+    data["short_liquidations_24h_meta"] = metric_meta(
+        methodology="Coinalyze liquidation history when available, otherwise locally tracked Bybit liquidation collector totals.",
+        confidence=0.55 if short_liq is not None else 0.2,
+        source="coinalyze_or_local_liquidations",
+        warning="Tracked liquidation, not full-market liquidation.",
+    )
     return LayerResult(layer="derivatives", source=source, data=data, errors=errors)

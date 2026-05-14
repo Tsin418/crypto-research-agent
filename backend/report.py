@@ -48,7 +48,7 @@ def _market_lines(context: ResearchContext) -> list[str]:
         f"- EMA20 / EMA50 / EMA200: {market.get('ema_20')} / {market.get('ema_50')} / {market.get('ema_200')}",
         f"- Funding Rate: {derivatives.get('funding_rate_now')}",
         f"- Open Interest 24h Change: {derivatives.get('open_interest_change_24h_pct')}%",
-        f"- 24h Liquidations Long / Short: {derivatives.get('long_liquidations_24h')} / {derivatives.get('short_liquidations_24h')}",
+        f"- 24h Tracked Liquidations Long / Short: {derivatives.get('long_liquidations_24h')} / {derivatives.get('short_liquidations_24h')}",
         f"- Put/Call Ratio: {derivatives.get('put_call_ratio')}",
         f"- Stablecoin 24h Supply Change: {onchain.get('stablecoin_supply_change_24h')}",
         f"- On-chain Signal: {onchain.get('onchain_signal')}",
@@ -81,6 +81,13 @@ def _evidence_quality_lines(context: ResearchContext) -> list[str]:
     etf = context.etf.data if context.etf else {}
     if etf and (etf.get("flow_direction") == "unavailable" or etf.get("is_stale")):
         lines.append("- Data limitation: ETF flow data is unavailable or stale; this report does not treat ETF flows as confirmed evidence.")
+    lines.extend(
+        [
+            "- Methodology label: tracked liquidation, not full-market liquidation.",
+            "- Methodology label: spot CVD approximation, not exact CVD.",
+            "- Methodology label: stablecoin supply proxy, not direct buying pressure.",
+        ]
+    )
     return lines
 
 
@@ -115,6 +122,24 @@ def _data_quality_lines(attr: dict) -> list[str]:
         if section.get("approximate"):
             detail = f"{detail}; approximate"
         lines.append(f"- {name.replace('_', ' ').title()}: {status}{detail}")
+    return lines
+
+
+def _layer_data_quality_lines(context: ResearchContext) -> list[str]:
+    lines: list[str] = []
+    layers = [context.market, context.derivatives, context.news, context.onchain]
+    if context.etf is not None:
+        layers.append(context.etf)
+    for layer in layers:
+        quality = layer.data.get("data_quality") or {}
+        if not quality:
+            continue
+        label = layer.layer.replace("_", " ").title()
+        freshness = quality.get("freshness", "unknown")
+        confidence = quality.get("confidence", "unknown")
+        warnings = quality.get("warnings") or []
+        warning_text = f" Warning: {warnings[0]}" if warnings else ""
+        lines.append(f"- {label}: freshness={freshness}, confidence={confidence}.{warning_text}")
     return lines
 
 
@@ -204,7 +229,7 @@ def local_report(context: ResearchContext) -> str:
                 lines.append(f"- {item.get('explanation')} Why not primary: {item.get('why_not_primary')}")
         else:
             lines.append("- No material alternative explanation was supported by the current data.")
-        lines.extend(["", "## 5. Data Quality", *_data_quality_lines(attr)])
+        lines.extend(["", "## 5. Data Quality", *_data_quality_lines(attr), *_layer_data_quality_lines(context)])
         lines.extend(["", "## 6. Attribution Trace Summary", *_trace_summary_lines(attr)])
         lines.extend(["", "## Noise / Unsupported Claims"])
         if attr["noise"]:
@@ -214,6 +239,9 @@ def local_report(context: ResearchContext) -> str:
             lines.append("No unsupported claim cluster was detected.")
         lines.extend(["", "## Risk Watch", *_risk_lines(risk)])
         lines.extend(["", "## Watchlist", "- Whether price reclaims or loses EMA20/EMA50.", "- Whether funding and open interest normalize.", "- Whether high-impact news continues in the same direction.", "- Whether large on-chain transfers or exchange inflows increase."])
+
+    if mode != "event_attribution":
+        lines.extend(["", "## Data Quality", *_data_quality_lines(attr), *_layer_data_quality_lines(context)])
 
     lines.extend(["", "## Data Limits"])
     layers = [context.market, context.derivatives, context.news, context.onchain]
@@ -234,13 +262,16 @@ def local_report(context: ResearchContext) -> str:
 async def generate_report(context: ResearchContext, llm: DeepSeekClient) -> str:
     mode_instruction = {
         "event_attribution": "Use Market Move Summary, Most Plausible Drivers, Secondary Drivers, Alternative Explanations, Data Quality, Attribution Trace Summary, Risk Watch, Data Limits, Disclaimer.",
-        "state_scan": "Use TL;DR, Market Snapshot, Bullish Factors, Bearish Factors, Risk Score, Watchlist, Data Limits, Disclaimer. Do not force Primary/Secondary/Noise sections.",
-        "risk_watch": "Use TL;DR, Market Snapshot, Risk Score, Key Risks, Watchlist, Data Limits, Disclaimer. Make Risk Score the center of the report.",
+        "state_scan": "Use TL;DR, Market Snapshot, Bullish Factors, Bearish Factors, Risk Score, Watchlist, Data Quality, Data Limits, Disclaimer. Do not force Primary/Secondary/Noise sections.",
+        "risk_watch": "Use TL;DR, Market Snapshot, Risk Score, Key Risks, Watchlist, Data Quality, Data Limits, Disclaimer. Make Risk Score the center of the report.",
     }.get(context.intent.mode, "Use the standard research report format.")
     system = (
         "You are a crypto research analyst. Generate a structured research report "
         "based only on the provided JSON data. Do not invent data. Do not make buy, "
         "sell, hold, leverage, or personalized investment recommendations. Explain each claim with evidence. "
+        "Use explicit methodology labels where relevant: tracked liquidation, not full-market liquidation; "
+        "spot CVD approximation, not exact CVD; ETF flow best effort, may be stale; "
+        "stablecoin supply proxy, not direct buying pressure. "
         f"Mode-specific format: {mode_instruction} Always include the exact disclaimer."
     )
     payload = context.model_dump()
@@ -289,10 +320,16 @@ def local_chinese_auto_report(context: ResearchContext) -> str:
         "## 衍生品信号",
         f"- Funding Rate：{derivatives.get('funding_rate_now') if derivatives.get('funding_rate_now') is not None else '当前数据不足以确认'}",
         f"- Open Interest 24小时变化：{derivatives.get('open_interest_change_24h_pct') if derivatives.get('open_interest_change_24h_pct') is not None else '当前数据不足以确认'}",
-        f"- 24小时多头/空头清算：{derivatives.get('long_liquidations_24h')} / {derivatives.get('short_liquidations_24h')}",
+        f"- 24小时已追踪多头/空头清算：{derivatives.get('long_liquidations_24h')} / {derivatives.get('short_liquidations_24h')}（不是全市场清算）",
         "",
         "## 链上信号",
         onchain.get("onchain_signal") or "当前数据不足以确认。",
+        "",
+        "## 数据质量",
+        f"- 市场数据：{(market.get('data_quality') or {}).get('confidence', 'unknown')}",
+        f"- 衍生品数据：{(derivatives.get('data_quality') or {}).get('confidence', 'unknown')}，清算为已追踪样本，不代表全市场。",
+        f"- 新闻数据：{(news.get('data_quality') or {}).get('confidence', 'unknown')}",
+        f"- 链上数据：{(onchain.get('data_quality') or {}).get('confidence', 'unknown')}，稳定币供应变化是流动性代理，不等于直接买盘。",
         "",
         "## 多空因素",
         "### 偏多因素",
@@ -320,14 +357,15 @@ async def generate_chinese_auto_report(context: ResearchContext, llm: DeepSeekCl
         "3. 不要使用英文标题，除非是 BTC、ETH、ETF、Funding Rate 等行业术语。\n"
         "4. 报告面向个人研究使用，风格简洁、清晰、偏投研。\n"
         "5. 如果数据不足，请明确说明“当前数据不足以确认”。\n"
-        "6. 必须包含风险提示。"
+        "6. 必须包含风险提示。\n"
+        "7. 涉及清算、CVD、ETF、稳定币供应时，必须说明：清算是已追踪样本不是全市场；spot CVD 是近似值不是精确 CVD；ETF flow 是 best effort 且可能滞后；稳定币供应是流动性代理不是直接买盘。"
     )
     user = {
         "required_format": (
             "# BTC/ETH 4小时市场异动分析\n"
             "## 一句话结论\n## 4小时市场表现\n## 可能驱动因素\n"
-            "## 新闻事件\n## 衍生品信号\n## 链上信号\n## 多空因素\n"
-            "### 偏多因素\n### 偏空因素\n## 接下来观察\n## 风险提示"
+            "## 新闻事件\n## 衍生品信号\n## 链上信号\n## 数据质量\n"
+            "## 多空因素\n### 偏多因素\n### 偏空因素\n## 接下来观察\n## 风险提示"
         ),
         "context": context.model_dump(),
         "required_disclaimer": CHINESE_DISCLAIMER,

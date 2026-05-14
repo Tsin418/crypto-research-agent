@@ -21,12 +21,14 @@ from backend.feishu import alchemy_ingest_summary, send_feishu_text
 from backend.liquidations import run_bybit_liquidation_collector
 from backend.models import AutoScanRequest, MarketScanRecord, MarketScanRequest, ReportRequest
 from backend.orchestrator import run_report_job
+from backend.scheduler import run_snapshot_scheduler
 from backend.storage import Storage
 from backend.utils import iso_now
 
 
 SETTINGS = get_settings()
 STORAGE = Storage(SETTINGS.db_path, SETTINGS.onchain_events_json_path)
+_snapshot_scheduler_task: asyncio.Task | None = None
 
 
 def _is_authorized_webhook(
@@ -57,6 +59,13 @@ def _start_liquidation_collector() -> None:
 
     thread = threading.Thread(target=runner, daemon=True)
     thread.start()
+
+
+def _start_snapshot_scheduler() -> None:
+    global _snapshot_scheduler_task
+    if not SETTINGS.snapshot_scheduler_enabled or _snapshot_scheduler_task is not None:
+        return
+    _snapshot_scheduler_task = asyncio.create_task(run_snapshot_scheduler(SETTINGS, STORAGE))
 
 
 async def _start_report_job(report_id: str, request: ReportRequest) -> None:
@@ -104,7 +113,12 @@ async def _get_or_create_market_scan(asset: str, force_refresh: bool) -> MarketS
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _start_liquidation_collector()
-    yield
+    _start_snapshot_scheduler()
+    try:
+        yield
+    finally:
+        if _snapshot_scheduler_task is not None:
+            _snapshot_scheduler_task.cancel()
 
 
 app = FastAPI(title="Crypto Research Agent", version="0.1.0", lifespan=lifespan)
@@ -203,6 +217,16 @@ async def list_market_scans(asset: str | None = None, limit: int = 20) -> dict[s
         raise HTTPException(status_code=400, detail="asset must be BTC or ETH")
     scans = STORAGE.list_market_scans(asset, limit)
     return {"results": [scan.model_dump() for scan in scans]}
+
+
+@app.get("/api/research/source-health")
+async def source_health(lookback_hours: int = 24) -> dict[str, Any]:
+    lookback_hours = max(1, min(lookback_hours, 168))
+    return {
+        "generated_at": iso_now(),
+        "lookback_hours": lookback_hours,
+        "sources": STORAGE.get_source_health(lookback_hours),
+    }
 
 
 @app.get("/api/research/reports")

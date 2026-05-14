@@ -54,6 +54,32 @@ class Storage:
                     FOREIGN KEY(report_id) REFERENCES reports(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS scheduled_snapshots (
+                    id TEXT PRIMARY KEY,
+                    asset TEXT NOT NULL,
+                    layer TEXT NOT NULL,
+                    source TEXT,
+                    raw_json TEXT NOT NULL,
+                    scan_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_snapshots_asset_layer_created
+                    ON scheduled_snapshots(asset, layer, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS scheduler_runs (
+                    id TEXT PRIMARY KEY,
+                    scan_type TEXT NOT NULL,
+                    assets TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    error_message TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scheduler_runs_created
+                    ON scheduler_runs(started_at DESC);
+
                 CREATE TABLE IF NOT EXISTS onchain_events (
                     id TEXT PRIMARY KEY,
                     asset TEXT NOT NULL,
@@ -317,6 +343,120 @@ class Storage:
                 """,
                 (snapshot_id, report_id, layer, source, json.dumps(raw_json), iso_now()),
             )
+
+    def save_scheduled_snapshot(
+        self,
+        *,
+        asset: str,
+        layer: str,
+        source: str | None,
+        raw_json: dict[str, Any],
+        scan_type: str = "snapshot",
+    ) -> str:
+        snapshot_id = f"{scan_type}:{asset}:{layer}:{iso_now()}"
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_snapshots
+                (id, asset, layer, source, raw_json, scan_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    asset,
+                    layer,
+                    source,
+                    json.dumps(raw_json, ensure_ascii=False),
+                    scan_type,
+                    iso_now(),
+                ),
+            )
+        return snapshot_id
+
+    def list_scheduled_snapshots(
+        self,
+        *,
+        asset: str | None = None,
+        layer: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 500))
+        conditions: list[str] = []
+        params: list[Any] = []
+        if asset:
+            conditions.append("asset=?")
+            params.append(asset)
+        if layer:
+            conditions.append("layer=?")
+            params.append(layer)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, asset, layer, source, raw_json, scan_type, created_at
+                FROM scheduled_snapshots
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (*params, limit),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "asset": row["asset"],
+                "layer": row["layer"],
+                "source": row["source"],
+                "data": json.loads(row["raw_json"]),
+                "scan_type": row["scan_type"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def start_scheduler_run(self, *, scan_type: str, assets: list[str] | tuple[str, ...]) -> str:
+        run_id = f"scheduler:{scan_type}:{iso_now()}"
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduler_runs
+                (id, scan_type, assets, status, started_at)
+                VALUES (?, ?, ?, 'running', ?)
+                """,
+                (run_id, scan_type, json.dumps(list(assets)), iso_now()),
+            )
+        return run_id
+
+    def complete_scheduler_run(self, run_id: str, *, status: str, error_message: str | None = None) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE scheduler_runs
+                SET status=?, completed_at=?, error_message=?
+                WHERE id=?
+                """,
+                (status, iso_now(), error_message, run_id),
+            )
+
+    def list_scheduler_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 100))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, scan_type, assets, status, started_at, completed_at, error_message
+                FROM scheduler_runs
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "assets": json.loads(row["assets"]) if row["assets"] else [],
+            }
+            for row in rows
+        ]
 
     def save_metric_snapshot(
         self,
@@ -587,6 +727,66 @@ class Storage:
                     (limit,),
                 ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_source_health(self, lookback_hours: int = 24) -> list[dict[str, Any]]:
+        lookback_hours = max(1, min(lookback_hours, 168))
+        cutoff = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat().replace("+00:00", "Z")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    provider,
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN status_code BETWEEN 200 AND 399 AND error_message IS NULL THEN 1 ELSE 0 END) AS success_count,
+                    SUM(CASE WHEN status_code BETWEEN 200 AND 399 AND error_message IS NULL THEN 0 ELSE 1 END) AS error_count,
+                    AVG(latency_ms) AS avg_latency_ms,
+                    MAX(CASE WHEN status_code BETWEEN 200 AND 399 AND error_message IS NULL THEN created_at END) AS last_success_at,
+                    MAX(CASE WHEN status_code BETWEEN 200 AND 399 AND error_message IS NULL THEN NULL ELSE created_at END) AS last_error_at
+                FROM api_call_logs
+                WHERE created_at >= ?
+                  AND provider IS NOT NULL
+                  AND provider != ''
+                GROUP BY provider
+                ORDER BY provider ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+
+        now = datetime.now(UTC)
+        sources: list[dict[str, Any]] = []
+        for row in rows:
+            total_count = int(row["total_count"] or 0)
+            success_count = int(row["success_count"] or 0)
+            error_count = int(row["error_count"] or 0)
+            error_rate = error_count / total_count if total_count else 1.0
+            last_success_at = row["last_success_at"]
+            last_success_dt = None
+            if last_success_at:
+                try:
+                    last_success_dt = datetime.fromisoformat(last_success_at.replace("Z", "+00:00")).astimezone(UTC)
+                except ValueError:
+                    last_success_dt = None
+            success_age_hours = (now - last_success_dt).total_seconds() / 3600 if last_success_dt else None
+
+            if error_rate >= 0.5 or success_count == 0:
+                health_status = "down"
+            elif error_rate >= 0.1 or success_age_hours is None or success_age_hours > 2:
+                health_status = "degraded"
+            else:
+                health_status = "healthy"
+
+            sources.append(
+                {
+                    "provider": row["provider"],
+                    "success_count": success_count,
+                    "error_count": error_count,
+                    "avg_latency_ms": round(float(row["avg_latency_ms"] or 0), 2),
+                    "last_success_at": last_success_at,
+                    "last_error_at": row["last_error_at"],
+                    "health_status": health_status,
+                }
+            )
+        return sources
 
     def save_liquidation_event(self, event_id: str, asset: str, symbol: str, event: dict[str, Any]) -> None:
         with self._lock, self._connect() as conn:

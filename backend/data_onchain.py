@@ -6,6 +6,7 @@ import httpx
 
 from backend.address_labels import apply_transfer_labels
 from backend.config import Settings
+from backend.data_quality import layer_quality, metric_meta
 from backend.data_liquidity import fetch_stablecoin_supply
 from backend.data_staking import fetch_eth_staking_queue
 from backend.http_client import get_json
@@ -275,6 +276,15 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
             transfers.extend(btc_transfers)
 
     quality = _evidence_quality(transfers, stablecoins.get("stablecoin_supply_change_24h"))
+    evidence_quality = quality.get("onchain_evidence_quality")
+    quality_warnings = [
+        "Exchange netflow is unavailable; transfer direction uses limited address labels.",
+        "Stablecoin supply change is a liquidity proxy, not direct buying pressure.",
+    ]
+    if evidence_quality in {"weak", "unknown", None}:
+        quality_warnings.append("Unknown transfers are low confidence and should not be described as confirmed whale intent.")
+    if errors:
+        quality_warnings.append("Some on-chain providers failed or returned incomplete data.")
     data = {
         "asset": asset,
         "exchange_netflow_24h": None,
@@ -300,4 +310,22 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
         **quality,
         "note": "ETH/EVM large transfers use Alchemy webhook events plus optional Etherscan watch addresses. BTC large transfers use mempool.space latest block scans.",
     }
+    data["data_quality"] = layer_quality(
+        freshness="fresh" if transfers or stablecoins else "unknown",
+        confidence={"strong": "high", "medium": "medium", "weak": "low", "unknown": "low"}.get(evidence_quality, "low"),
+        methodology="Large-transfer scan plus stablecoin supply proxy; address-label coverage is limited and exchange netflow is unavailable.",
+        warnings=quality_warnings,
+    )
+    data["stablecoin_supply_change_24h_meta"] = metric_meta(
+        methodology="DeFiLlama stablecoin supply delta used as a broad liquidity proxy.",
+        confidence=0.55 if stablecoins.get("stablecoin_supply_change_24h") is not None else 0.2,
+        source="defillama_stablecoins",
+        warning="Stablecoin supply proxy, not direct buying pressure.",
+    )
+    data["exchange_inflow_count_meta"] = metric_meta(
+        methodology="Counts only transfers classified as potential sell pressure by available local labels and rules.",
+        confidence=0.5 if quality.get("exchange_inflow_count") else 0.25,
+        source="local_address_labels_and_transfer_rules",
+        warning="Limited label coverage; unknown transfers remain low confidence.",
+    )
     return LayerResult(layer="onchain", source="etherscan/alchemy_webhooks/mempool.space", data=data, errors=errors)

@@ -45,6 +45,14 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _tuple_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    values = tuple(item.strip().upper() for item in raw.split(",") if item.strip())
+    return values or default
+
+
 @dataclass(frozen=True)
 class Settings:
     deepseek_api_key: str
@@ -75,6 +83,10 @@ class Settings:
     price_4h_down_threshold_pct: float
     market_scan_cache_ttl_minutes: int
     report_cache_ttl_minutes: int
+    snapshot_scheduler_enabled: bool
+    snapshot_scheduler_interval_minutes: int
+    snapshot_scheduler_assets: tuple[str, ...]
+    snapshot_scheduler_run_on_startup: bool
 
 
 def get_settings() -> Settings:
@@ -119,4 +131,8 @@ def get_settings() -> Settings:
         price_4h_down_threshold_pct=_float_env("PRICE_4H_DOWN_THRESHOLD_PCT", -1.0),
         market_scan_cache_ttl_minutes=_int_env("MARKET_SCAN_CACHE_TTL_MINUTES", 15),
         report_cache_ttl_minutes=_int_env("REPORT_CACHE_TTL_MINUTES", 15),
+        snapshot_scheduler_enabled=_bool_env("SNAPSHOT_SCHEDULER_ENABLED", False),
+        snapshot_scheduler_interval_minutes=_int_env("SNAPSHOT_SCHEDULER_INTERVAL_MINUTES", 15),
+        snapshot_scheduler_assets=_tuple_env("SNAPSHOT_SCHEDULER_ASSETS", ("BTC", "ETH")),
+        snapshot_scheduler_run_on_startup=_bool_env("SNAPSHOT_SCHEDULER_RUN_ON_STARTUP", False),
     )

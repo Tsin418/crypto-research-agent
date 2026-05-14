@@ -9,6 +9,7 @@ import feedparser
 import httpx
 
 from backend.config import Settings
+from backend.data_quality import layer_quality
 from backend.data_etf import fetch_btc_etf_flow
 from backend.http_client import get_text
 from backend.models import LayerResult
@@ -405,9 +406,21 @@ async def fetch_news(settings: Settings, asset: str, time_window: str, llm=None)
         for event, classification in zip(deduped, classifications)
     ]
     top_news = await select_top_news_event(llm, deduped, asset)
+    quality_warnings = []
+    if errors:
+        quality_warnings.append("Some RSS feeds or ETF news fallback sources failed.")
+    if llm is None or not getattr(llm, "available", False):
+        quality_warnings.append("News classification used keyword/rule fallback instead of LLM review.")
+    return_data = {"events": deduped, "top_news": top_news, "news_signal": _signal(deduped), "etf_flow": etf_flow}
+    return_data["data_quality"] = layer_quality(
+        freshness="fresh" if deduped else "unknown",
+        confidence="medium" if deduped else "low",
+        methodology="RSS headline collection with deduplication and rule-based classification when LLM review is unavailable.",
+        warnings=quality_warnings,
+    )
     return LayerResult(
         layer="news",
         source="rss",
-        data={"events": deduped, "top_news": top_news, "news_signal": _signal(deduped), "etf_flow": etf_flow},
+        data=return_data,
         errors=errors,
     )

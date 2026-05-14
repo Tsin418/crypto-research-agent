@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from backend.config import ROOT_DIR
+from backend.data_quality import layer_quality, metric_meta
 from backend.http_client import get_text
 from backend.models import LayerResult
 from backend.utils import iso_now, safe_float
@@ -59,7 +60,14 @@ def _payload(
     is_stale: bool = False,
     note: str,
 ) -> dict[str, Any]:
-    return {
+    warnings = ["ETF flow best effort, may be stale."]
+    if source == "news_fallback":
+        warnings.append("ETF flow is inferred from news fallback, not direct flow data.")
+    if latest is None:
+        warnings.append("Direct ETF flow is unavailable.")
+    if is_stale:
+        warnings.append("ETF cache is stale and may not reflect the current trading day.")
+    payload = {
         "asset": "BTC",
         "net_flow_usd_m_latest": latest,
         "net_flow_usd_m_5d": five_day,
@@ -72,6 +80,20 @@ def _payload(
         "etf_flow_signal": "etf_flow_available" if latest is not None else "etf_flow_unavailable",
         "source": source,
     }
+    payload["data_quality"] = layer_quality(
+        freshness="stale" if is_stale else ("fresh" if latest is not None else "unknown"),
+        confidence="medium" if latest is not None and source != "news_fallback" else ("low" if latest is not None else "low"),
+        methodology="BTC spot ETF flow from Farside best-effort HTML, local cache, or low-confidence news fallback.",
+        source_timestamp=payload["updated_at"],
+        warnings=warnings,
+    )
+    payload["btc_etf_net_flow_usd_m_meta"] = metric_meta(
+        methodology="Best-effort BTC spot ETF net flow in USD millions.",
+        confidence=0.7 if latest is not None and source != "news_fallback" and not is_stale else (0.35 if latest is not None else 0.2),
+        source=source,
+        warning="ETF flow best effort, may be stale.",
+    )
+    return payload
 
 
 def _read_cache(cache_path: Path) -> dict[str, Any] | None:
