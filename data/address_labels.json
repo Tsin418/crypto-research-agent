@@ -1,0 +1,152 @@
+{
+  "0x28c6c06298d514db089934071355e5743bf21d60": {
+    "label": "Binance 7",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x21a31ee1afc51d94c2efccaa2092ad1028285549": {
+    "label": "Binance 8",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0xdfd5293d8e347dfe59e90efd55b2956a1343963d": {
+    "label": "Binance 14",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x56eddb7aa87536c09ccc2793473599fd21a8b17f": {
+    "label": "Binance 18",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x71660c4005ba85c37ccec55d0c4493e3fe75d1e3": {
+    "label": "Coinbase 1",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x503828976d22510aad0201ac7ec88293211d23da": {
+    "label": "Coinbase 2",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740": {
+    "label": "Coinbase 3",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x3cd751e6b0078be393132f39eeb5906a7e4f1e28": {
+    "label": "Coinbase 4",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0": {
+    "label": "Kraken 1",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0xe84f75fc9caa49876d0ba18f39e0b1c2e1ef610b": {
+    "label": "Kraken 2",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": {
+    "label": "OKX 1",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x7bebd226154e865954a3a6709b7e6f2f8c15c9f4": {
+    "label": "OKX 2",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0xf89d7b9c864f589bbf53a82105107622b35eaa40": {
+    "label": "Bybit 1",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x1db92e2eebc8e0c075a02bea49a2935bcd2dfcf4": {
+    "label": "Bitget 1",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0x0d0707963952f2fba59dd06f2b425ace40b492fe": {
+    "label": "Gate.io 1",
+    "entity_type": "exchange",
+    "chain": "ethereum"
+  },
+  "0xc098b2a3aa256d2140208c3de6543aaef5cdb094": {
+    "label": "FTX Estate",
+    "entity_type": "custody",
+    "chain": "ethereum"
+  },
+  "0x5754284f345afc66a98fbb0a0afe71e0f007b949": {
+    "label": "Tether Treasury",
+    "entity_type": "issuer",
+    "chain": "ethereum"
+  },
+  "0x1baB42f66FbBFfA49b7BEc6e6a1f1Ec4BA6f5c1e": {
+    "label": "Tether Treasury 2",
+    "entity_type": "issuer",
+    "chain": "ethereum"
+  },
+  "0x55FE002aefF02F77364de339a1292923A15844B8": {
+    "label": "Circle Mint",
+    "entity_type": "issuer",
+    "chain": "ethereum"
+  },
+  "0xeC9144e8Bc8b67DfdF83F0d8CD4Ea8a64165C1E9": {
+    "label": "Circle Mint 2",
+    "entity_type": "issuer",
+    "chain": "ethereum"
+  },
+  "0x40c3C8B0c7D9c01a2DeE0C1D2f86b04cAD9C2B6F": {
+    "label": "Arbitrum Bridge",
+    "entity_type": "bridge",
+    "chain": "ethereum"
+  },
+  "0x8315177aB297bA92A06054cE80a67Ed4DBd7ed3a": {
+    "label": "Arbitrum Gateway",
+    "entity_type": "bridge",
+    "chain": "ethereum"
+  },
+  "0x99C9fc46f92E8a1c0deC1b1747d010903E884bE1": {
+    "label": "Optimism Gateway",
+    "entity_type": "bridge",
+    "chain": "ethereum"
+  },
+  "0x49048044D57e1C92A77f79988d21Fa8fAF74E97e": {
+    "label": "Base Bridge",
+    "entity_type": "bridge",
+    "chain": "ethereum"
+  },
+  "0x3154Cf16ccdb4C6d922629664174b904d80F2C35": {
+    "label": "Polygon Bridge",
+    "entity_type": "bridge",
+    "chain": "ethereum"
+  },
+  "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h": {
+    "label": "Binance BTC Cold",
+    "entity_type": "exchange",
+    "chain": "bitcoin"
+  },
+  "3M219KR5QoFgvnQghgSz1B6nhUpQpKEnx3": {
+    "label": "Binance BTC Hot",
+    "entity_type": "exchange",
+    "chain": "bitcoin"
+  },
+  "bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjwvw97": {
+    "label": "Coinbase BTC Cold",
+    "entity_type": "exchange",
+    "chain": "bitcoin"
+  },
+  "bc1qazcm763858nkj2dj986etajv6wquslv8uxwczt": {
+    "label": "Kraken BTC",
+    "entity_type": "exchange",
+    "chain": "bitcoin"
+  },
+  "bc1q32lyrhp9zpqa4z5w0qpkruemvh7nx2xnk28mza": {
+    "label": "OKX BTC",
+    "entity_type": "exchange",
+    "chain": "bitcoin"
+  }
+}

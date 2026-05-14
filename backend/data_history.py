@@ -96,6 +96,7 @@ def save_layer_metric_snapshots(
         value = _numeric(layer_data.get(metric_name))
         if value is None:
             continue
+        meta = layer_data.get(f"{metric_name}_meta") or {}
         storage.save_metric_snapshot(
             asset=asset,
             layer=layer,
@@ -103,4 +104,6 @@ def save_layer_metric_snapshots(
             metric_value=value,
             source=source,
             report_id=report_id,
+            methodology=meta.get("methodology"),
+            confidence=meta.get("confidence"),
         )

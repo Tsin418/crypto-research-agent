@@ -64,7 +64,14 @@ def normalize_alchemy_webhook(payload: dict[str, Any], threshold_eth: int) -> li
 
 def _onchain_signal(asset: str, transfers: list[dict], stablecoin_supply_change: float | None) -> str:
     exchange_inflows = [tx for tx in transfers if tx.get("direction") == "potential_sell_pressure"]
-    large_transfers = [tx for tx in transfers if str(tx.get("direction", "")).startswith("large_")]
+    large_transfers = [
+        tx for tx in transfers
+        if tx.get("direction") in (
+            "large_eth_transfer", "large_btc_transfer", "unknown_transfer",
+            "large_transfer_with_partial_labels", "exchange_internal_transfer",
+            "custodian_movement", "bridge_movement",
+        )
+    ]
     if len(exchange_inflows) >= 2:
         return "exchange_inflow_pressure"
     if len(large_transfers) >= 3:
@@ -80,13 +87,21 @@ def _onchain_signal(asset: str, transfers: list[dict], stablecoin_supply_change:
 
 def _evidence_quality(transfers: list[dict], stablecoin_supply_change: float | None) -> dict[str, Any]:
     exchange_inflows = [tx for tx in transfers if tx.get("direction") == "potential_sell_pressure"]
-    large_transfers = [tx for tx in transfers if str(tx.get("direction", "")).startswith("large_")]
+    exchange_internal = [tx for tx in transfers if tx.get("direction") == "exchange_internal_transfer"]
+    large_transfers = [
+        tx for tx in transfers
+        if tx.get("direction") in (
+            "large_eth_transfer", "large_btc_transfer", "unknown_transfer",
+            "large_transfer_with_partial_labels",
+        )
+    ]
     if len(exchange_inflows) >= 2:
         return {
             "onchain_evidence_quality": "strong",
             "onchain_primary_eligible": True,
             "exchange_inflow_count": len(exchange_inflows),
             "large_transfer_count": len(large_transfers),
+            "exchange_internal_count": len(exchange_internal),
         }
     if len(exchange_inflows) == 1:
         return {
@@ -94,6 +109,7 @@ def _evidence_quality(transfers: list[dict], stablecoin_supply_change: float | N
             "onchain_primary_eligible": False,
             "exchange_inflow_count": len(exchange_inflows),
             "large_transfer_count": len(large_transfers),
+            "exchange_internal_count": len(exchange_internal),
         }
     if large_transfers:
         return {
@@ -101,6 +117,7 @@ def _evidence_quality(transfers: list[dict], stablecoin_supply_change: float | N
             "onchain_primary_eligible": False,
             "exchange_inflow_count": 0,
             "large_transfer_count": len(large_transfers),
+            "exchange_internal_count": len(exchange_internal),
         }
     if stablecoin_supply_change is not None and stablecoin_supply_change < 0:
         return {
@@ -108,12 +125,14 @@ def _evidence_quality(transfers: list[dict], stablecoin_supply_change: float | N
             "onchain_primary_eligible": False,
             "exchange_inflow_count": 0,
             "large_transfer_count": 0,
+            "exchange_internal_count": len(exchange_internal),
         }
     return {
         "onchain_evidence_quality": "unknown",
         "onchain_primary_eligible": False,
         "exchange_inflow_count": 0,
         "large_transfer_count": 0,
+        "exchange_internal_count": len(exchange_internal),
     }
 
 
@@ -280,6 +299,9 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
     quality_warnings = [
         "Exchange netflow is unavailable; transfer direction uses limited address labels.",
         "Stablecoin supply change is a liquidity proxy, not direct buying pressure.",
+        "Exchange-to-exchange transfers are internal/venue flow with low attribution confidence.",
+        "Issuer or treasury movements are not direct buying pressure.",
+        "Do not describe unknown wallet transfers as confirmed whale selling without labeled exchange destination.",
     ]
     if evidence_quality in {"weak", "unknown", None}:
         quality_warnings.append("Unknown transfers are low confidence and should not be described as confirmed whale intent.")

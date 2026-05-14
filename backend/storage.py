@@ -160,6 +160,14 @@ class Storage:
                     ON metric_snapshots(asset, metric_name, created_at DESC);
                 """
             )
+            metric_snapshot_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(metric_snapshots)").fetchall()
+            }
+            if "methodology" not in metric_snapshot_columns:
+                conn.execute("ALTER TABLE metric_snapshots ADD COLUMN methodology TEXT")
+            if "confidence" not in metric_snapshot_columns:
+                conn.execute("ALTER TABLE metric_snapshots ADD COLUMN confidence REAL")
             existing_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(reports)").fetchall()
@@ -467,6 +475,8 @@ class Storage:
         metric_value: float | None,
         source: str | None = None,
         report_id: str | None = None,
+        methodology: str | None = None,
+        confidence: float | None = None,
     ) -> None:
         if metric_value is None:
             return
@@ -474,10 +484,12 @@ class Storage:
             conn.execute(
                 """
                 INSERT INTO metric_snapshots
-                (created_at, asset, layer, metric_name, metric_value, source, report_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (created_at, asset, layer, metric_name, metric_value, source, report_id,
+                 methodology, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (iso_now(), asset, layer, metric_name, metric_value, source, report_id),
+                (iso_now(), asset, layer, metric_name, metric_value, source, report_id,
+                 methodology, confidence),
             )
 
     def get_metric_history(self, asset: str, metric_name: str, lookback_days: int = 90, limit: int = 500) -> list[float]:

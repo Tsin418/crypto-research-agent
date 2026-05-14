@@ -11,18 +11,33 @@ LABEL_PATH = Path(__file__).resolve().parent.parent / "data" / "address_labels.j
 @lru_cache(maxsize=1)
 def load_address_labels() -> dict:
     if not LABEL_PATH.exists():
-        return {"ETH": {}, "BTC": {}}
+        return {}
     try:
         return json.loads(LABEL_PATH.read_text())
     except json.JSONDecodeError:
-        return {"ETH": {}, "BTC": {}}
+        return {}
 
 
 def get_address_label(asset: str, address: str | None) -> dict | None:
     if not address:
         return None
-    labels = load_address_labels().get(asset, {})
-    return labels.get(address.lower()) or labels.get(address)
+    labels = load_address_labels()
+    # Nested format: {"ETH": {"0x...": {...}}, "BTC": {"bc1...": {...}}}
+    if asset in labels and isinstance(labels[asset], dict):
+        return labels[asset].get(address.lower()) or labels[asset].get(address)
+    # Flat format: {"0x...": {"label": "...", "entity_type": "...", "chain": "..."}}
+    entry = labels.get(address.lower()) or labels.get(address)
+    if isinstance(entry, dict):
+        chain = str(entry.get("chain", "")).upper()
+        if chain == asset.upper():
+            return entry
+    return None
+
+
+def _entity_type(entry: dict | None) -> str | None:
+    if not entry:
+        return None
+    return entry.get("entity_type") or entry.get("type")
 
 
 def apply_transfer_labels(event: dict) -> dict:
@@ -31,14 +46,40 @@ def apply_transfer_labels(event: dict) -> dict:
     to_address = event.get("to_label")
     from_label = get_address_label(asset, from_address)
     to_label = get_address_label(asset, to_address)
+
+    from_type = _entity_type(from_label)
+    to_type = _entity_type(to_label)
+
     if from_label:
         event["from_label"] = from_label.get("label", from_address)
-        event["from_label_type"] = from_label.get("type")
+        event["from_entity_type"] = from_type
     if to_label:
         event["to_label"] = to_label.get("label", to_address)
-        event["to_label_type"] = to_label.get("type")
-    if to_label and to_label.get("type") == "exchange":
+        event["to_entity_type"] = to_type
+
+    if to_type == "exchange" and from_type == "exchange":
+        event["direction"] = "exchange_internal_transfer"
+        event["direction_confidence"] = "low"
+    elif to_type == "exchange" and from_type != "exchange":
         event["direction"] = "potential_sell_pressure"
-    elif from_label and from_label.get("type") == "exchange":
+        event["direction_confidence"] = "medium"
+    elif from_type == "exchange" and to_type != "exchange":
         event["direction"] = "accumulation_or_custody_outflow"
+        event["direction_confidence"] = "medium"
+    elif to_type == "issuer" or from_type == "issuer" or to_type == "treasury" or from_type == "treasury":
+        event["direction"] = "issuer_or_treasury_movement"
+        event["direction_confidence"] = "low"
+    elif to_type == "custody" or from_type == "custody":
+        event["direction"] = "custodian_movement"
+        event["direction_confidence"] = "low"
+    elif to_type == "bridge" or from_type == "bridge":
+        event["direction"] = "bridge_movement"
+        event["direction_confidence"] = "low"
+    elif from_label is None and to_label is None:
+        event["direction"] = "unknown_transfer"
+        event["direction_confidence"] = "low"
+    else:
+        event["direction"] = "large_transfer_with_partial_labels"
+        event["direction_confidence"] = "low"
+
     return event

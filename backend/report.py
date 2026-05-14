@@ -72,12 +72,15 @@ def _risk_lines(risk: dict) -> list[str]:
 
 def _evidence_quality_lines(context: ResearchContext) -> list[str]:
     lines = [
-        "- Strong: labeled exchange inflow, direct market data, or official source.",
-        "- Medium: public API with partial context.",
-        "- Weak: unlabeled large transfer or price commentary.",
+        "- Strong: labeled exchange inflow (not internal transfer), direct market data, or official source.",
+        "- Medium: public API with partial context, or single labeled exchange inflow.",
+        "- Weak: unlabeled large transfer, exchange internal transfer, or price commentary.",
     ]
-    if context.onchain.data.get("onchain_evidence_quality"):
-        lines.append(f"- On-chain evidence quality: {context.onchain.data.get('onchain_evidence_quality')}.")
+    onchain = context.onchain.data
+    if onchain.get("onchain_evidence_quality"):
+        lines.append(f"- On-chain evidence quality: {onchain.get('onchain_evidence_quality')}.")
+        if onchain.get("exchange_internal_count"):
+            lines.append(f"- {onchain.get('exchange_internal_count')} exchange internal transfers excluded from inflow count.")
     etf = context.etf.data if context.etf else {}
     if etf and (etf.get("flow_direction") == "unavailable" or etf.get("is_stale")):
         lines.append("- Data limitation: ETF flow data is unavailable or stale; this report does not treat ETF flows as confirmed evidence.")
@@ -86,6 +89,7 @@ def _evidence_quality_lines(context: ResearchContext) -> list[str]:
             "- Methodology label: tracked liquidation, not full-market liquidation.",
             "- Methodology label: spot CVD approximation, not exact CVD.",
             "- Methodology label: stablecoin supply proxy, not direct buying pressure.",
+            "- On-chain wording rule: never describe unknown transfers as 'whale selling' without confirmed exchange destination.",
         ]
     )
     return lines
@@ -272,6 +276,11 @@ async def generate_report(context: ResearchContext, llm: DeepSeekClient) -> str:
         "Use explicit methodology labels where relevant: tracked liquidation, not full-market liquidation; "
         "spot CVD approximation, not exact CVD; ETF flow best effort, may be stale; "
         "stablecoin supply proxy, not direct buying pressure. "
+        "On-chain transfer wording rules: never write 'whale is selling' unless the destination "
+        "is a confirmed labeled exchange address AND the evidence is strong. "
+        "Prefer: 'A large transfer to a labeled exchange address may indicate potential sell-side preparation, "
+        "but attribution confidence is limited.' "
+        "Exchange-to-exchange transfers are internal venue flow with low attribution confidence. "
         f"Mode-specific format: {mode_instruction} Always include the exact disclaimer."
     )
     payload = context.model_dump()
@@ -324,6 +333,11 @@ def local_chinese_auto_report(context: ResearchContext) -> str:
         "",
         "## 链上信号",
         onchain.get("onchain_signal") or "当前数据不足以确认。",
+        f"- 链上证据质量：{onchain.get('onchain_evidence_quality') or '当前数据不足以确认'}",
+        f"- 已标记交易所转入笔数：{onchain.get('exchange_inflow_count') if onchain.get('exchange_inflow_count') is not None else '当前数据不足以确认'}",
+        f"- 交易所内部转账笔数（不计入流入）：{onchain.get('exchange_internal_count') if onchain.get('exchange_internal_count') is not None else '当前数据不足以确认'}",
+        f"- 大额转账笔数：{onchain.get('large_transfer_count') if onchain.get('large_transfer_count') is not None else '当前数据不足以确认'}",
+        "注意：仅当目标地址为已标记的交易所地址时才标记为潜在卖压，交易所之间转账为内部调拨，未标记转账不得描述为鲸鱼卖出。",
         "",
         "## 数据质量",
         f"- 市场数据：{(market.get('data_quality') or {}).get('confidence', 'unknown')}",
@@ -358,7 +372,8 @@ async def generate_chinese_auto_report(context: ResearchContext, llm: DeepSeekCl
         "4. 报告面向个人研究使用，风格简洁、清晰、偏投研。\n"
         "5. 如果数据不足，请明确说明“当前数据不足以确认”。\n"
         "6. 必须包含风险提示。\n"
-        "7. 涉及清算、CVD、ETF、稳定币供应时，必须说明：清算是已追踪样本不是全市场；spot CVD 是近似值不是精确 CVD；ETF flow 是 best effort 且可能滞后；稳定币供应是流动性代理不是直接买盘。"
+        "7. 涉及清算、CVD、ETF、稳定币供应时，必须说明：清算是已追踪样本不是全市场；spot CVD 是近似值不是精确 CVD；ETF flow 是 best effort 且可能滞后；稳定币供应是流动性代理不是直接买盘。\n"
+        "8. 链上大额转账措辞规则：除非目标地址是已确认的交易所地址且证据确凿，否则绝对不要写“鲸鱼在卖”。应优先使用：“一笔大额转账至已标记的交易所地址可能表明潜在的卖盘准备，但归因置信度有限。”交易所之间的转账为内部调拨，归因置信度低。"
     )
     user = {
         "required_format": (

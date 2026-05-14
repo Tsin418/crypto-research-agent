@@ -14,7 +14,11 @@
     "nodejs_compat"
   ],
   "vars": {
-    "ETH_LARGE_TRANSFER_THRESHOLD_ETH": "500"
+    "ETH_LARGE_TRANSFER_THRESHOLD_ETH": "500",
+    "SNAPSHOT_CRON_ENABLED": "false"
+  },
+  "triggers": {
+    "crons": ["*/30 * * * *"]
   },
   "d1_databases": [
     {

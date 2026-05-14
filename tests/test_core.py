@@ -83,7 +83,7 @@ def test_alchemy_webhook_normalization_filters_large_eth_transfers() -> None:
     }
     events = normalize_alchemy_webhook(payload, threshold_eth=500)
     assert len(events) == 1
-    assert events[0]["direction"] == "large_eth_transfer"
+    assert events[0]["direction"] == "unknown_transfer"
     assert events[0]["amount"] == 600
 
 
