@@ -169,6 +169,10 @@ export default function App() {
     () => reports.some((report) => report.metadata?.status === "completed"),
     [reports]
   );
+  const latestCompletedReportId = useMemo(
+    () => reports.find((report) => report.metadata?.status === "completed")?.id || null,
+    [reports]
+  );
 
   async function checkBackendHealth() {
     try {
@@ -357,7 +361,7 @@ export default function App() {
     autoscan: <AutoScan onOpenDetail={(reportId) => openReportDetail("autoscan", reportId || currentReportId || reports[0]?.id)} />,
     onchain: <OnchainEvents currentReportId={currentReportId} currentAsset={asset === "AUTO" ? "BTC" : asset} />,
     sources: <DataSources reportId={currentReportId} />,
-    trace: <AttributionTrace reportId={currentReportId || reports[0]?.id} />,
+    trace: <AttributionTrace reportId={currentReport?.metadata?.status === "completed" ? currentReportId : latestCompletedReportId} />,
     settings: (
       <Settings
         backendOnline={backendOnline}

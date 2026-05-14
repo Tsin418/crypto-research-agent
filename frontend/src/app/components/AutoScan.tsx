@@ -64,6 +64,25 @@ interface AutoScanReport {
   updated_at?: string;
 }
 
+function isMissingEndpointError(error: unknown) {
+  return error instanceof Error && error.message.includes("HTTP 404");
+}
+
+function reportToMarketScan(report: AutoScanReport): MarketScanRecord | null {
+  if (report.asset !== "BTC" && report.asset !== "ETH") return null;
+  return {
+    asset: report.asset,
+    price_now: report.price_now ?? null,
+    price_change_4h_pct: report.price_change_4h_pct ?? null,
+    direction:
+      report.direction === "rising" || report.direction === "falling" || report.direction === "neutral"
+        ? report.direction
+        : "neutral",
+    direction_label_zh: report.direction_label_zh || "震荡",
+    created_at: report.updated_at || new Date().toISOString(),
+  };
+}
+
 export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) => void } = {}) {
   const [assets, setAssets] = useState<{ BTC: boolean; ETH: boolean }>({ BTC: true, ETH: true });
   const [window, setWindow] = useState("4h");
@@ -77,13 +96,18 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
   ]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scan", "Failed to load market prices", {
+  async function loadMarketScans(selectedAssets: Array<"BTC" | "ETH">, force = false) {
+    const payload = await requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scan", "Failed to load market prices", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assets: ["BTC", "ETH"], force_refresh: false }),
-    })
-      .then((payload) => setMarketScans(payload.results || []))
+      body: JSON.stringify({ assets: selectedAssets, force_refresh: force }),
+    });
+    setMarketScans(payload.results || []);
+    return payload.results || [];
+  }
+
+  useEffect(() => {
+    loadMarketScans(["BTC", "ETH"], false)
       .catch(() => {});
   }, []);
 
@@ -116,6 +140,12 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
       clearInterval(id);
       setActiveStep(processSteps.length);
       setReports(payload.reports || []);
+      const scansFromReports = (payload.reports || [])
+        .map(reportToMarketScan)
+        .filter((scan): scan is MarketScanRecord => scan !== null);
+      if (scansFromReports.length) {
+        setMarketScans(scansFromReports);
+      }
       setScanLog([
         {
           time: new Date(payload.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -129,6 +159,30 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
         })),
       ]);
     } catch (err) {
+      if (isMissingEndpointError(err)) {
+        try {
+          const selectedAssets = (Object.entries(assets).filter(([, enabled]) => enabled).map(([asset]) => asset) as Array<"BTC" | "ETH">);
+          const scans = await loadMarketScans(selectedAssets.length ? selectedAssets : ["BTC", "ETH"], forceRefresh);
+          clearInterval(id);
+          setActiveStep(processSteps.length);
+          setError(null);
+          setScanLog([
+            {
+              time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              msg: "Loaded market scan data; auto-report endpoint is not available on this backend",
+              status: "ok",
+            },
+            ...scans.map((scan) => ({
+              time: new Date(scan.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              msg: `${scan.asset} market scan completed`,
+              status: "ok",
+            })),
+          ]);
+          return;
+        } catch (fallbackErr) {
+          err = fallbackErr;
+        }
+      }
       clearInterval(id);
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -222,7 +276,8 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
       {/* BTC + ETH price cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {(["BTC", "ETH"] as const).map((asset) => {
-          const scan = marketScans.find((s) => s.asset === asset);
+          const reportScan = reports.map(reportToMarketScan).find((s) => s?.asset === asset);
+          const scan = marketScans.find((s) => s.asset === asset) || reportScan;
           const price = scan?.price_now ?? null;
           const change = scan?.price_change_4h_pct ?? null;
           const direction = scan?.direction || "neutral";

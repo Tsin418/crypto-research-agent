@@ -50,6 +50,10 @@ function formatCurrency(value: number | null | undefined, compact = false) {
   }).format(value);
 }
 
+function hasFiniteValue(value: number | null | undefined) {
+  return value !== null && value !== undefined && Number.isFinite(value);
+}
+
 function formatPercent(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
@@ -267,24 +271,30 @@ export function Overview({
     {
       label: "BTC",
       report: btcReport,
-      fallbackPrice: btcMarketScan?.price_now,
-      fallbackChange: btcMarketScan?.price_change_4h_pct,
+      marketScan: btcMarketScan,
       sub: "4h change",
-      source: btcReport ? "report snapshot" : btcMarketScan ? "market scan" : null,
-      snapshotTime: btcReport?.updated_at || btcMarketScan?.created_at || null,
     },
     {
       label: "ETH",
       report: ethReport,
-      fallbackPrice: ethMarketScan?.price_now,
-      fallbackChange: ethMarketScan?.price_change_4h_pct,
+      marketScan: ethMarketScan,
       sub: "4h change",
-      source: ethReport ? "report snapshot" : ethMarketScan ? "market scan" : null,
-      snapshotTime: ethReport?.updated_at || ethMarketScan?.created_at || null,
     },
   ].map((item) => {
-    const change = item.report?.price_change_4h_pct ?? item.fallbackChange ?? null;
-    const price = item.report?.price_now ?? item.fallbackPrice ?? null;
+    const reportHasPrice = hasFiniteValue(item.report?.price_now);
+    const scanHasPrice = hasFiniteValue(item.marketScan?.price_now);
+    const price = reportHasPrice
+      ? item.report?.price_now
+      : scanHasPrice
+        ? item.marketScan?.price_now
+        : null;
+    const change = reportHasPrice
+      ? item.report?.price_change_4h_pct
+      : scanHasPrice
+        ? item.marketScan?.price_change_4h_pct
+        : null;
+    const source = reportHasPrice ? "report snapshot" : scanHasPrice ? "market scan" : null;
+    const snapshotTime = reportHasPrice ? item.report?.updated_at : scanHasPrice ? item.marketScan?.created_at : null;
     const trend = trendFor(change);
     return {
       label: item.label,
