@@ -15,25 +15,10 @@ interface TraceCandidate {
 }
 
 interface TracePayload {
-  report_id?: string;
   attribution_trace?: TraceCandidate[];
   trace_summary?: Record<string, unknown>;
   data_quality?: Record<string, unknown>;
   alternative_explanations?: unknown[];
-}
-
-interface ReportRecord {
-  report_id: string;
-  status: string;
-}
-
-interface SnapshotEnvelope {
-  data?: Record<string, unknown> | { data?: Record<string, unknown> };
-}
-
-interface DashboardData {
-  report_id?: string;
-  snapshots?: Record<string, SnapshotEnvelope>;
 }
 
 function ClassBadge({ cls }: { cls: string }) {
@@ -52,101 +37,23 @@ function formatAdjustments(value?: string[] | string) {
   return value || "n/a";
 }
 
-function isNotFoundError(error: unknown) {
-  return error instanceof Error && error.message.includes("HTTP 404");
-}
-
-function unwrapAttribution(data: DashboardData, fallbackReportId: string): TracePayload {
-  const attribution = data.snapshots?.attribution?.data;
-  const payload =
-    attribution && typeof attribution === "object" && "data" in attribution
-      ? (attribution.data as TracePayload | undefined)
-      : (attribution as TracePayload | undefined);
-
-  return {
-    report_id: data.report_id || fallbackReportId,
-    attribution_trace: payload?.attribution_trace || [],
-    trace_summary: payload?.trace_summary || {},
-    data_quality: payload?.data_quality || {},
-    alternative_explanations: payload?.alternative_explanations || [],
-  };
-}
-
-async function loadTraceForReport(reportId: string) {
-  try {
-    return await requestJson<TracePayload>(`/api/research/report/${reportId}/trace`, "Failed to load attribution trace");
-  } catch (error) {
-    if (!isNotFoundError(error)) throw error;
-    const data = await requestJson<DashboardData>(
-      `/api/research/report/${reportId}/data`,
-      "Failed to load attribution trace from report data"
-    );
-    return unwrapAttribution(data, reportId);
-  }
-}
-
 export function AttributionTrace({ reportId }: { reportId?: string | null }) {
   const [payload, setPayload] = useState<TracePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!reportId) return;
     let cancelled = false;
 
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const candidateIds = reportId ? [reportId] : [];
-        if (!candidateIds.length) {
-          const reportsPayload = await requestJson<{ reports: ReportRecord[] }>(
-            "/api/research/reports?status=completed&limit=10",
-            "Failed to find a report for attribution trace"
-          );
-          candidateIds.push(...(reportsPayload.reports || []).map((report) => report.report_id));
-        }
-
-        let lastError: unknown = null;
-        for (const candidateId of candidateIds) {
-          try {
-            const data = await loadTraceForReport(candidateId);
-            if (!cancelled) {
-              setPayload(data);
-              setError(null);
-            }
-            return;
-          } catch (err) {
-            lastError = err;
-            if (!isNotFoundError(err)) break;
-          }
-        }
-
-        if (reportId && isNotFoundError(lastError)) {
-          const reportsPayload = await requestJson<{ reports: ReportRecord[] }>(
-            "/api/research/reports?status=completed&limit=10",
-            "Failed to find a fallback report for attribution trace"
-          );
-          for (const report of reportsPayload.reports || []) {
-            if (report.report_id === reportId) continue;
-            try {
-              const data = await loadTraceForReport(report.report_id);
-              if (!cancelled) {
-                setPayload(data);
-                setError(null);
-              }
-              return;
-            } catch (err) {
-              lastError = err;
-            }
-          }
-        }
-
-        throw lastError || new Error("No completed report found for attribution trace.");
+        const data = await requestJson<TracePayload>(`/api/research/report/${reportId}/trace`, "Failed to load attribution trace");
+        if (!cancelled) setPayload(data);
       } catch (err) {
-        if (!cancelled) {
-          setPayload(null);
-          setError(err instanceof Error ? err.message : String(err));
-        }
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -210,7 +117,7 @@ export function AttributionTrace({ reportId }: { reportId?: string | null }) {
 
       <div className="bg-white rounded-xl border border-slate-100 p-5">
         <h3 className="text-base mb-1" style={{ fontWeight: 600 }}>
-          {payload?.report_id || reportId ? `Report ${payload?.report_id || reportId}` : "Latest report"} attribution trace
+          {reportId ? `Report ${reportId}` : "Latest report"} attribution trace
         </h3>
         <p className="text-xs text-slate-500">
           This view is loaded from the backend trace endpoint for the selected report.
