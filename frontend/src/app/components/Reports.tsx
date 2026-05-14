@@ -91,9 +91,9 @@ export function Reports({
       r.asset === activeFilter ||
       (activeFilter === "Completed" && r.status === "completed") ||
       (activeFilter === "Failed" && r.status === "failed") ||
-      (activeFilter === "Event Attribution" && r.mode === "event attribution") ||
-      (activeFilter === "State Scan" && r.mode === "state scan") ||
-      (activeFilter === "Risk Watch" && r.mode === "risk watch") ||
+      (activeFilter === "Event Attribution" && r.mode.toLowerCase() === "event attribution") ||
+      (activeFilter === "State Scan" && r.mode.toLowerCase() === "state scan") ||
+      (activeFilter === "Risk Watch" && r.mode.toLowerCase() === "risk watch") ||
       (activeFilter === "High Risk" && r.risk === "High") ||
       (activeFilter === "Low Risk" && r.risk === "Low");
     const matchSearch = !search || r.query.toLowerCase().includes(search.toLowerCase());

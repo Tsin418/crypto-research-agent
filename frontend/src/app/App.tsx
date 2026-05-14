@@ -20,6 +20,7 @@ import { DataSources } from "./components/DataSources";
 import { AttributionTrace } from "./components/AttributionTrace";
 import { Settings } from "./components/Settings";
 import { ReportDetail } from "./components/ReportDetail";
+import { DEFAULT_API_BASE_URL, getApiBaseUrl, requestJson } from "./api";
 
 type Page = "overview" | "reports" | "autoscan" | "onchain" | "sources" | "trace" | "settings" | "detail";
 type ParentPage = "overview" | "reports" | "autoscan";
@@ -61,7 +62,6 @@ interface ResearchReport {
   error?: string;
 }
 
-const RESPONSE_BODY_PREVIEW_LENGTH = 500;
 const MAX_POLL_RETRIES = 30;
 const POLL_INTERVAL_MS = 2000;
 
@@ -74,39 +74,6 @@ const navItems: { id: Exclude<Page, "detail">; label: string; icon: React.ReactN
   { id: "trace", label: "Trace", icon: <GitBranch size={14} /> },
   { id: "settings", label: "Settings", icon: <Settings2 size={14} /> },
 ];
-
-function getApiBaseUrl() {
-  const baseUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/+$/, "");
-
-  if (import.meta.env.PROD && !baseUrl) {
-    throw new Error("Missing VITE_API_URL in production. Please set it to the public FastAPI backend URL.");
-  }
-
-  return baseUrl;
-}
-
-async function parseErrorResponse(res: Response, label: string) {
-  const body = await res.text().catch(() => "");
-  const bodyPreview = body ? ` ${body.slice(0, RESPONSE_BODY_PREVIEW_LENGTH)}` : "";
-  return new Error(`${label}: HTTP ${res.status} ${res.statusText || ""}${bodyPreview}`);
-}
-
-function formatFetchError(error: unknown, label: string, url: string) {
-  const message = error instanceof Error ? error.message : String(error);
-  return new Error(`${label}: network or CORS error while requesting ${url}. ${message}`);
-}
-
-async function requestJson<T>(url: string, label: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init).catch((error) => {
-    throw formatFetchError(error, label, url);
-  });
-
-  if (!res.ok) {
-    throw await parseErrorResponse(res, label);
-  }
-
-  return res.json();
-}
 
 function toResearchReport(record: ReportRecord, dashboardData?: DashboardData): ResearchReport {
   return {
@@ -208,9 +175,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    const baseUrl = getApiBaseUrl();
-
-    requestJson<{ reports: ReportRecord[] }>(`${baseUrl}/api/research/reports?limit=20`, "Failed to load reports")
+    requestJson<{ reports: ReportRecord[] }>("/api/research/reports?limit=20", "Failed to load reports")
       .then((payload) => {
         setReports(payload.reports.map((record) => toResearchReport(record)));
         setBackendOnline(true);
@@ -224,6 +189,7 @@ export default function App() {
   function openReportDetail(parent: ParentPage, reportId?: string) {
     if (reportId) {
       setCurrentReportId(reportId);
+      void loadReportDetail(reportId);
     }
     setDetailParentPage(parent);
     setPage("detail");
@@ -232,9 +198,8 @@ export default function App() {
   async function hydrateReport(record: ReportRecord) {
     let dashboardData: DashboardData | undefined;
     if (record.status === "completed") {
-      const baseUrl = getApiBaseUrl();
       dashboardData = await requestJson<DashboardData>(
-        `${baseUrl}/api/research/report/${record.report_id}/data`,
+        `/api/research/report/${record.report_id}/data`,
         "Failed to fetch dashboard data"
       );
     }
@@ -245,6 +210,18 @@ export default function App() {
     return report;
   }
 
+  async function loadReportDetail(reportId: string) {
+    try {
+      const record = await requestJson<ReportRecord>(`/api/research/report/${reportId}`, "Failed to load report");
+      await hydrateReport(record);
+      setBackendOnline(true);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setErrorMessage(detail);
+      console.error(error);
+    }
+  }
+
   async function handleGenerateReport() {
     const query = queryDraft.trim();
     if (!query || isGenerating) return;
@@ -253,8 +230,7 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      const baseUrl = getApiBaseUrl();
-      const start = await requestJson<{ report_id: string }>(`${baseUrl}/api/research/report`, "Failed to start report", {
+      const start = await requestJson<{ report_id: string }>("/api/research/report", "Failed to start report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -268,7 +244,7 @@ export default function App() {
       for (let retries = 0; retries < MAX_POLL_RETRIES; retries += 1) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         reportData = await requestJson<ReportRecord>(
-          `${baseUrl}/api/research/report/${start.report_id}`,
+          `/api/research/report/${start.report_id}`,
           "Failed to fetch report status"
         );
 
@@ -306,11 +282,11 @@ export default function App() {
       />
     ),
     reports: <Reports reports={reports.map((report) => report.metadata)} onOpenDetail={(id) => openReportDetail("reports", id)} />,
-    autoscan: <AutoScan onOpenDetail={() => openReportDetail("autoscan", currentReportId || reports[0]?.id)} />,
+    autoscan: <AutoScan onOpenDetail={(reportId) => openReportDetail("autoscan", reportId || currentReportId || reports[0]?.id)} />,
     onchain: <OnchainEvents />,
     sources: <DataSources />,
-    trace: <AttributionTrace />,
-    settings: <Settings backendOnline={backendOnline} />,
+    trace: <AttributionTrace reportId={currentReportId || reports[0]?.id} />,
+    settings: <Settings backendOnline={backendOnline} apiBaseUrl={getApiBaseUrl() || DEFAULT_API_BASE_URL} />,
     detail: (
       <ReportDetail
         reportId={currentReport?.id}

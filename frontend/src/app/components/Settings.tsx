@@ -2,9 +2,9 @@ import { CheckCircle, XCircle, AlertCircle, Info } from "lucide-react";
 
 interface SettingsProps {
   backendOnline?: boolean;
+  apiBaseUrl?: string;
 }
 
-const VITE_API_URL = "https://andrew418-crypto-research-agent.hf.space";
 const VITE_WORKER_URL = "https://crypto-research-agent.workers.dev";
 const DEFAULT_ASSET = "AUTO";
 const DEFAULT_WINDOW = "4h";
@@ -35,8 +35,9 @@ function ConfigRow({ label, value, note, ok, warn }: { label: string; value: str
   );
 }
 
-export function Settings({ backendOnline = true }: SettingsProps = {}) {
+export function Settings({ backendOnline = true, apiBaseUrl = "" }: SettingsProps = {}) {
   const workerConfigured = Boolean(VITE_WORKER_URL);
+  const apiConfigured = Boolean(apiBaseUrl);
 
   return (
     <div className="p-6 space-y-5">
@@ -53,7 +54,7 @@ export function Settings({ backendOnline = true }: SettingsProps = {}) {
           {
             label: "Backend API",
             value: backendOnline ? "Connected" : "Disconnected",
-            sub: backendOnline ? "GET /health → 200" : "GET /health failed",
+            sub: backendOnline ? "GET /api/research/reports → 200" : "Backend request failed",
             color: backendOnline ? "bg-green-500" : "bg-red-500",
             text: backendOnline ? "text-green-700" : "text-red-700",
             bg: backendOnline ? "bg-green-50 border-green-100" : "bg-red-50 border-red-100",
@@ -68,11 +69,11 @@ export function Settings({ backendOnline = true }: SettingsProps = {}) {
           },
           {
             label: "API Base URL",
-            value: VITE_API_URL ? "Set" : "Missing",
-            sub: VITE_API_URL ? "Required ✓" : "Required for production",
-            color: VITE_API_URL ? "bg-green-500" : "bg-red-500",
-            text: VITE_API_URL ? "text-green-700" : "text-red-700",
-            bg: VITE_API_URL ? "bg-green-50 border-green-100" : "bg-red-50 border-red-100",
+            value: apiConfigured ? "Set" : "Proxy",
+            sub: apiConfigured ? "Remote backend configured" : "Using local Vite proxy",
+            color: apiConfigured ? "bg-green-500" : "bg-blue-500",
+            text: apiConfigured ? "text-green-700" : "text-blue-700",
+            bg: apiConfigured ? "bg-green-50 border-green-100" : "bg-blue-50 border-blue-100",
           },
           {
             label: "Environment",
@@ -102,9 +103,10 @@ export function Settings({ backendOnline = true }: SettingsProps = {}) {
           <div>
             <ConfigRow
               label="Backend API URL"
-              value={VITE_API_URL || "Not configured"}
+              value={apiBaseUrl || "Local proxy /api"}
               note="VITE_API_URL"
-              ok={Boolean(VITE_API_URL)}
+              ok={apiConfigured}
+              warn={!apiConfigured}
             />
             <ConfigRow
               label="Worker URL"

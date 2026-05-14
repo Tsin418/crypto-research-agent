@@ -1,24 +1,10 @@
 import { useState } from "react";
 import { Sparkline } from "./Sparkline";
 import { Play, Loader2 } from "lucide-react";
+import { requestJson } from "../api";
 
 const btcData = [103200, 102800, 103100, 102600, 102100, 101900, 102430];
 const ethData = [3400, 3390, 3410, 3415, 3420, 3418, 3420];
-
-const scanLog = [
-  { time: "14:28", msg: "BTC report completed", status: "ok" },
-  { time: "14:27", msg: "Fetched derivatives data", status: "ok" },
-  { time: "14:26", msg: "RSS classification partial", status: "warn" },
-  { time: "14:25", msg: "CoinGecko market snapshot", status: "ok" },
-  { time: "14:24", msg: "Auto scan started", status: "info" },
-];
-
-const autoReportRows = [
-  { label: "Market", value: "Falling" },
-  { label: "Funding Rate", value: "4h cumulative -0.012%" },
-  { label: "Key Drivers", value: "Leverage flush + spot sell pressure" },
-  { label: "Risk Level", value: "Elevated" },
-];
 
 const processSteps = [
   "Fetching market data",
@@ -29,26 +15,99 @@ const processSteps = [
   "Generating report",
 ];
 
-export function AutoScan({ onOpenDetail }: { onOpenDetail?: () => void } = {}) {
+interface AutoScanReport {
+  report_id: string;
+  asset: string;
+  price_now?: number | null;
+  price_change_4h_pct?: number | null;
+  price_change_24h_pct?: number | null;
+  direction?: string | null;
+  direction_label_zh?: string | null;
+  trigger_reason?: string | null;
+  report_markdown?: string;
+  updated_at?: string;
+}
+
+export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) => void } = {}) {
   const [assets, setAssets] = useState<{ BTC: boolean; ETH: boolean }>({ BTC: true, ETH: true });
   const [window, setWindow] = useState("4h");
   const [forceRefresh, setForceRefresh] = useState(false);
   const [running, setRunning] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
+  const [reports, setReports] = useState<AutoScanReport[]>([]);
+  const [scanLog, setScanLog] = useState([
+    { time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), msg: "Auto scan ready", status: "info" },
+  ]);
+  const [error, setError] = useState<string | null>(null);
 
-  function handleRun() {
+  async function handleRun() {
     setRunning(true);
     setActiveStep(0);
+    setError(null);
+    setScanLog([{ time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), msg: "Auto scan started", status: "info" }]);
     let i = 0;
     const id = setInterval(() => {
       i += 1;
       setActiveStep(i);
       if (i >= processSteps.length) {
         clearInterval(id);
-        setRunning(false);
       }
     }, 450);
+
+    try {
+      const selectedAssets = (Object.entries(assets).filter(([, enabled]) => enabled).map(([asset]) => asset) as Array<"BTC" | "ETH">);
+      const payload = await requestJson<{ generated_at: string; cache_hit: boolean; reports: AutoScanReport[] }>("/api/research/auto-scan", "Failed to run auto scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assets: selectedAssets.length ? selectedAssets : ["BTC", "ETH"],
+          time_window: window,
+          force_refresh: forceRefresh,
+        }),
+      });
+
+      clearInterval(id);
+      setActiveStep(processSteps.length);
+      setReports(payload.reports || []);
+      setScanLog([
+        {
+          time: new Date(payload.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          msg: payload.cache_hit ? "Loaded cached auto-scan reports" : "Auto-scan reports generated",
+          status: "ok",
+        },
+        ...payload.reports.map((report) => ({
+          time: report.updated_at ? new Date(report.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a",
+          msg: `${report.asset} report completed`,
+          status: "ok",
+        })),
+      ]);
+    } catch (err) {
+      clearInterval(id);
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setScanLog((prev) => [
+        { time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), msg: "Auto scan failed", status: "warn" },
+        ...prev,
+      ]);
+    } finally {
+      setRunning(false);
+    }
   }
+
+  const latestReport = reports[0];
+  const autoReportRows = latestReport
+    ? [
+        { label: "Asset", value: latestReport.asset },
+        { label: "Market", value: latestReport.direction || latestReport.direction_label_zh || "n/a" },
+        { label: "4h Change", value: latestReport.price_change_4h_pct === null || latestReport.price_change_4h_pct === undefined ? "n/a" : `${latestReport.price_change_4h_pct.toFixed(2)}%` },
+        { label: "Trigger", value: latestReport.trigger_reason || "n/a" },
+      ]
+    : [
+        { label: "Market", value: "Run auto scan to load backend data" },
+        { label: "Assets", value: Object.entries(assets).filter(([, enabled]) => enabled).map(([asset]) => asset).join(", ") || "None" },
+        { label: "Window", value: window },
+        { label: "Force Refresh", value: forceRefresh ? "On" : "Off" },
+      ];
 
   return (
     <div className="p-6 space-y-5">
@@ -58,6 +117,8 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: () => void } = {}) {
           Trigger or monitor automatic BTC / ETH market scans using backend cache, 4h thresholds, and auto-report generation.
         </p>
       </div>
+
+      {error && <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-3 text-xs">{error}</div>}
 
       {/* Scan Controls */}
       <div className="bg-white rounded-xl border border-slate-100 p-4">
@@ -181,7 +242,9 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: () => void } = {}) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <h3 className="text-sm mb-3" style={{ fontWeight: 600 }}>Latest Auto Report</h3>
-          <div className="text-base mb-3 truncate" style={{ fontWeight: 600 }}>BTC 4h Market Scan Report</div>
+          <div className="text-base mb-3 truncate" style={{ fontWeight: 600 }}>
+            {latestReport ? `${latestReport.asset} ${window} Market Scan Report` : "Latest Auto Report"}
+          </div>
           <div className="overflow-x-auto w-full">
             <table className="w-full text-xs mb-4">
               <tbody>
@@ -196,7 +259,8 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: () => void } = {}) {
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => onOpenDetail?.()}
+              onClick={() => onOpenDetail?.(latestReport?.report_id)}
+              disabled={!latestReport}
               className="text-xs text-blue-600 border border-blue-200 px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors"
             >
               Open full report
