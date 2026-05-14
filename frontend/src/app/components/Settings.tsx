@@ -3,12 +3,13 @@ import { CheckCircle, XCircle, AlertCircle, Info } from "lucide-react";
 interface SettingsProps {
   backendOnline?: boolean;
   apiBaseUrl?: string;
+  displayApiUrl?: string;
+  backendError?: string;
+  workerApiUrl?: string;
 }
 
-const VITE_WORKER_URL = "https://crypto-research-agent.workers.dev";
 const DEFAULT_ASSET = "AUTO";
 const DEFAULT_WINDOW = "4h";
-const ENV_MODE = "production";
 const REPORT_LIMIT = 20;
 const SOURCE_HEALTH_LOOKBACK = 24;
 
@@ -35,9 +36,16 @@ function ConfigRow({ label, value, note, ok, warn }: { label: string; value: str
   );
 }
 
-export function Settings({ backendOnline = true, apiBaseUrl = "" }: SettingsProps = {}) {
-  const workerConfigured = Boolean(VITE_WORKER_URL);
+export function Settings({
+  backendOnline = true,
+  apiBaseUrl = "",
+  displayApiUrl = apiBaseUrl,
+  backendError,
+  workerApiUrl = "",
+}: SettingsProps = {}) {
+  const workerConfigured = Boolean(workerApiUrl);
   const apiConfigured = Boolean(apiBaseUrl);
+  const envMode = import.meta.env.MODE || "development";
 
   return (
     <div className="p-6 space-y-5">
@@ -54,7 +62,7 @@ export function Settings({ backendOnline = true, apiBaseUrl = "" }: SettingsProp
           {
             label: "Backend API",
             value: backendOnline ? "Connected" : "Disconnected",
-            sub: backendOnline ? "GET /api/research/reports → 200" : "Backend request failed",
+            sub: backendOnline ? "GET /health -> 200" : "Backend health check failed",
             color: backendOnline ? "bg-green-500" : "bg-red-500",
             text: backendOnline ? "text-green-700" : "text-red-700",
             bg: backendOnline ? "bg-green-50 border-green-100" : "bg-red-50 border-red-100",
@@ -62,7 +70,7 @@ export function Settings({ backendOnline = true, apiBaseUrl = "" }: SettingsProp
           {
             label: "Worker URL",
             value: workerConfigured ? "Configured" : "Missing",
-            sub: workerConfigured ? "VITE_WORKER_URL set" : "On-chain events unavailable",
+            sub: workerConfigured ? "On-chain fallback available" : "On-chain fallback unavailable",
             color: workerConfigured ? "bg-green-500" : "bg-yellow-500",
             text: workerConfigured ? "text-green-700" : "text-yellow-700",
             bg: workerConfigured ? "bg-green-50 border-green-100" : "bg-yellow-50 border-yellow-100",
@@ -77,7 +85,7 @@ export function Settings({ backendOnline = true, apiBaseUrl = "" }: SettingsProp
           },
           {
             label: "Environment",
-            value: ENV_MODE,
+            value: envMode,
             sub: "Build mode",
             color: "bg-blue-500",
             text: "text-blue-700",
@@ -102,23 +110,29 @@ export function Settings({ backendOnline = true, apiBaseUrl = "" }: SettingsProp
           <p className="text-xs text-slate-400 mb-4">Read from build-time environment variables. To change these, update your deployment environment and redeploy.</p>
           <div>
             <ConfigRow
-              label="Backend API URL"
-              value={apiBaseUrl || "Local proxy /api"}
+              label="Current API URL"
+              value={displayApiUrl || "Local proxy /api"}
               note="VITE_API_URL"
               ok={apiConfigured}
               warn={!apiConfigured}
             />
             <ConfigRow
+              label="Health"
+              value={backendOnline ? "online" : "offline"}
+              note={backendError || "GET /health"}
+              ok={backendOnline}
+            />
+            <ConfigRow
               label="Worker URL"
-              value={VITE_WORKER_URL || "Not configured"}
-              note="VITE_WORKER_URL"
+              value={workerApiUrl || "Not configured"}
+              note="VITE_WORKER_API_URL or VITE_WORKER_URL"
               ok={workerConfigured}
               warn={!workerConfigured}
             />
             <ConfigRow
               label="Environment Mode"
-              value={ENV_MODE}
-              note="NODE_ENV"
+              value={envMode}
+              note="Vite mode"
             />
           </div>
         </div>

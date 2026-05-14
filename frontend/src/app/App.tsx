@@ -20,7 +20,7 @@ import { DataSources } from "./components/DataSources";
 import { AttributionTrace } from "./components/AttributionTrace";
 import { Settings } from "./components/Settings";
 import { ReportDetail } from "./components/ReportDetail";
-import { DEFAULT_API_BASE_URL, getApiBaseUrl, requestJson } from "./api";
+import { getApiBaseUrl, getDisplayApiBaseUrl, getWorkerApiBaseUrl, requestJson } from "./api";
 
 type Page = "overview" | "reports" | "autoscan" | "onchain" | "sources" | "trace" | "settings" | "detail";
 type ParentPage = "overview" | "reports" | "autoscan";
@@ -40,18 +40,6 @@ interface ReportRecord {
   price_now?: number | null;
   price_change_4h_pct?: number | null;
   price_change_24h_pct?: number | null;
-  direction?: string | null;
-  direction_label_zh?: string | null;
-  trigger_reason?: string | null;
-  top_news_title?: string | null;
-  top_news_url?: string | null;
-  top_news_source?: string | null;
-  top_news_json?: {
-    title?: string;
-    url?: string;
-    source?: string;
-    reason_zh?: string;
-  } | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -71,6 +59,22 @@ interface ResearchReport {
   metadata: ReportRecord;
   dashboardData?: DashboardData;
   reportMarkdown: string;
+  error?: string;
+}
+
+interface MarketScanRecord {
+  asset: "BTC" | "ETH";
+  price_now: number | null;
+  price_change_4h_pct: number | null;
+  direction: "rising" | "falling" | "neutral";
+  direction_label_zh: string;
+  created_at: string;
+}
+
+interface BackendHealth {
+  online: boolean;
+  checked: boolean;
+  apiUrl: string;
   error?: string;
 }
 
@@ -160,7 +164,14 @@ export default function App() {
   const [asset, setAsset] = useState<AssetSel>("AUTO");
   const [timeframe, setTimeframe] = useState<WindowSel>("4h");
   const [backendOnline, setBackendOnline] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth>({
+    online: false,
+    checked: false,
+    apiUrl: getDisplayApiBaseUrl(),
+  });
   const [reports, setReports] = useState<ResearchReport[]>([]);
+  const [marketScans, setMarketScans] = useState<MarketScanRecord[]>([]);
+  const [marketLoading, setMarketLoading] = useState(false);
   const [currentReportId, setCurrentReportId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -186,8 +197,27 @@ export default function App() {
     [reports]
   );
 
-  useEffect(() => {
-    requestJson<{ reports: ReportRecord[] }>("/api/research/reports?limit=20", "Failed to load reports")
+  const hasCompletedReports = useMemo(
+    () => reports.some((report) => report.metadata.status === "completed"),
+    [reports]
+  );
+
+  async function checkBackendHealth() {
+    try {
+      await requestJson<{ status: string }>("/health", "Backend health check failed");
+      setBackendOnline(true);
+      setBackendHealth({ online: true, checked: true, apiUrl: getDisplayApiBaseUrl() });
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setBackendOnline(false);
+      setBackendHealth({ online: false, checked: true, apiUrl: getDisplayApiBaseUrl(), error: detail });
+      return false;
+    }
+  }
+
+  async function loadReports() {
+    return requestJson<{ reports: ReportRecord[] }>("/api/research/reports?status=all&limit=20", "Failed to load reports")
       .then((payload) => {
         setReports(payload.reports.map((record) => toResearchReport(record)));
         setBackendOnline(true);
@@ -196,6 +226,29 @@ export default function App() {
         setBackendOnline(false);
         console.warn(error);
       });
+  }
+
+  async function loadMarketScans(forceRefresh = false) {
+    setMarketLoading(true);
+    try {
+      const payload = await requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scan", "Failed to load market scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets: ["BTC", "ETH"], force_refresh: forceRefresh }),
+      });
+      setMarketScans(payload.results || []);
+      setBackendOnline(true);
+    } catch (error) {
+      console.warn(error);
+    } finally {
+      setMarketLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void checkBackendHealth();
+    void loadReports();
+    void loadMarketScans(false);
   }, []);
 
   function openReportDetail(parent: ParentPage, reportId?: string) {
@@ -234,8 +287,9 @@ export default function App() {
     }
   }
 
-  async function handleGenerateReport() {
-    const query = queryDraft.trim();
+  async function handleGenerateReport(options?: { asset?: "BTC" | "ETH"; query?: string; openDetail?: boolean }) {
+    const selectedAsset = options?.asset || (asset === "AUTO" ? undefined : asset);
+    const query = (options?.query || queryDraft).trim();
     if (!query || isGenerating) return;
 
     setIsGenerating(true);
@@ -247,7 +301,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          asset: asset === "AUTO" ? undefined : asset,
+          asset: selectedAsset,
           time_window: timeframe,
         }),
       });
@@ -270,7 +324,10 @@ export default function App() {
       }
 
       await hydrateReport(reportData);
-      openReportDetail("overview", reportData.report_id);
+      await loadReports();
+      if (options?.openDetail !== false) {
+        openReportDetail("overview", reportData.report_id);
+      }
       setBackendOnline(true);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -282,6 +339,12 @@ export default function App() {
     }
   }
 
+  function handleGenerateAssetReport(selectedAsset: "BTC" | "ETH") {
+    const query = `Analyze ${selectedAsset} market conditions over the past ${timeframe} across market, derivatives, news, on-chain and macro context.`;
+    setQueryDraft(query);
+    void handleGenerateReport({ asset: selectedAsset, query });
+  }
+
   const activePage: Exclude<Page, "detail"> = page === "detail" ? detailParentPage : (page as Exclude<Page, "detail">);
 
   const pageComponents: Record<Page, React.ReactNode> = {
@@ -291,7 +354,13 @@ export default function App() {
         reports={reports.map((report) => report.metadata)}
         onQueryChange={setQueryDraft}
         onGenerateReport={handleGenerateReport}
+        onGenerateAssetReport={handleGenerateAssetReport}
+        onRunAutoScan={() => setPage("autoscan")}
         onOpenDetail={(reportId) => openReportDetail("overview", reportId || currentReportId || reports[0]?.id)}
+        hasReports={hasCompletedReports}
+        marketScans={marketScans}
+        marketLoading={marketLoading}
+        backendHealth={backendHealth}
       />
     ),
     reports: <Reports reports={reports.map((report) => report.metadata)} onOpenDetail={(id) => openReportDetail("reports", id)} />,
@@ -299,7 +368,15 @@ export default function App() {
     onchain: <OnchainEvents />,
     sources: <DataSources />,
     trace: <AttributionTrace reportId={currentReportId || reports[0]?.id} />,
-    settings: <Settings backendOnline={backendOnline} apiBaseUrl={getApiBaseUrl() || DEFAULT_API_BASE_URL} />,
+    settings: (
+      <Settings
+        backendOnline={backendOnline}
+        apiBaseUrl={getApiBaseUrl()}
+        displayApiUrl={backendHealth.apiUrl}
+        backendError={backendHealth.error}
+        workerApiUrl={getWorkerApiBaseUrl()}
+      />
+    ),
     detail: (
       <ReportDetail
         reportId={currentReport?.id}
@@ -350,7 +427,7 @@ export default function App() {
         </button>
 
         <button
-          onClick={handleGenerateReport}
+          onClick={() => handleGenerateReport()}
           disabled={isGenerating || !queryDraft.trim()}
           className="text-xs bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 transition-colors disabled:opacity-50 shrink-0 min-w-[88px]"
           style={{ fontWeight: 500 }}
@@ -360,9 +437,17 @@ export default function App() {
 
         <div className="flex items-center gap-1.5 text-xs text-slate-500 pl-2 border-l border-slate-100 shrink-0">
           <span className={`w-2 h-2 rounded-full ${backendOnline ? "bg-green-500" : "bg-red-500"}`} />
-          <span className="hidden md:inline">{backendOnline ? "Backend" : "Offline"}</span>
+          <span className="hidden md:inline" title={backendHealth.error || backendHealth.apiUrl}>
+            {backendOnline ? "Backend" : "Offline"}
+          </span>
         </div>
       </header>
+
+      {backendHealth.checked && !backendHealth.online && (
+        <div className="bg-amber-50 border-b border-amber-100 px-5 py-2 text-xs text-amber-800">
+          Backend unreachable. Current API URL: <span className="font-mono">{backendHealth.apiUrl}</span>. Check VITE_API_URL, deployment, CORS, host, and port.
+        </div>
+      )}
 
       {errorMessage && (
         <div className="bg-red-50 border-b border-red-100 px-5 py-2 text-xs text-red-700">

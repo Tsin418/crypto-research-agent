@@ -1,4 +1,5 @@
 export const DEFAULT_API_BASE_URL = "https://andrew418-crypto-research-agent.hf.space";
+export const DEFAULT_WORKER_API_BASE_URL = "https://crypto-research-agent.workers.dev";
 
 const RESPONSE_BODY_PREVIEW_LENGTH = 500;
 
@@ -10,6 +11,21 @@ export function getApiBaseUrl() {
   }
 
   return import.meta.env.PROD ? DEFAULT_API_BASE_URL : "";
+}
+
+export function getDisplayApiBaseUrl() {
+  return getApiBaseUrl() || "Local proxy /api";
+}
+
+export function getWorkerApiBaseUrl() {
+  return (
+    import.meta.env.VITE_WORKER_API_URL ||
+    import.meta.env.VITE_WORKER_URL ||
+    DEFAULT_WORKER_API_BASE_URL ||
+    ""
+  )
+    .trim()
+    .replace(/\/+$/, "");
 }
 
 async function parseErrorResponse(res: Response, label: string) {

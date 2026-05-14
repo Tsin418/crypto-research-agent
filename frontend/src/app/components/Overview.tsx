@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sparkline } from "./Sparkline";
-import { TrendingDown, TrendingUp, Minus } from "lucide-react";
+import { TrendingDown, TrendingUp, Minus, Play, FileText } from "lucide-react";
 import { requestJson } from "../api";
 
 interface BackendReport {
@@ -83,12 +83,34 @@ interface OnchainTransfer {
   to_label?: string;
 }
 
+interface MarketScanRecord {
+  asset: "BTC" | "ETH";
+  price_now: number | null;
+  price_change_4h_pct: number | null;
+  direction: "rising" | "falling" | "neutral";
+  direction_label_zh: string;
+  created_at: string;
+}
+
+interface BackendHealth {
+  online: boolean;
+  checked: boolean;
+  apiUrl: string;
+  error?: string;
+}
+
 interface OverviewProps {
   queryDraft?: string;
   reports?: BackendReport[];
   onQueryChange?: (q: string) => void;
   onGenerateReport?: () => void;
+  onGenerateAssetReport?: (asset: "BTC" | "ETH") => void;
+  onRunAutoScan?: () => void;
   onOpenDetail?: (reportId?: string) => void;
+  hasReports?: boolean;
+  marketScans?: MarketScanRecord[];
+  marketLoading?: boolean;
+  backendHealth?: BackendHealth;
 }
 
 const emptySparkData = [0, 0, 0, 0, 0, 0, 0];
@@ -187,12 +209,56 @@ function categoryClass(category: string) {
   return "bg-purple-100 text-purple-700";
 }
 
+function EmptyReportState({ onGenerateAssetReport, onRunAutoScan }: Pick<OverviewProps, "onGenerateAssetReport" | "onRunAutoScan">) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 p-5">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <div className="text-base text-slate-900" style={{ fontWeight: 600 }}>No completed reports yet.</div>
+          <p className="text-sm text-slate-500 mt-1">
+            Run Auto Scan or generate a BTC / ETH report to populate attribution, risk, news, and trace data.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 shrink-0">
+          <button
+            onClick={() => onGenerateAssetReport?.("BTC")}
+            className="inline-flex items-center gap-1.5 text-xs bg-orange-600 text-white rounded-lg px-3 py-2 hover:bg-orange-700 transition-colors"
+            style={{ fontWeight: 500 }}
+          >
+            <FileText size={13} /> Generate BTC Report
+          </button>
+          <button
+            onClick={() => onGenerateAssetReport?.("ETH")}
+            className="inline-flex items-center gap-1.5 text-xs bg-blue-600 text-white rounded-lg px-3 py-2 hover:bg-blue-700 transition-colors"
+            style={{ fontWeight: 500 }}
+          >
+            <FileText size={13} /> Generate ETH Report
+          </button>
+          <button
+            onClick={() => onRunAutoScan?.()}
+            className="inline-flex items-center gap-1.5 text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors"
+            style={{ fontWeight: 500 }}
+          >
+            <Play size={13} /> Run Auto Scan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Overview({
   queryDraft = "",
   reports = [],
   onQueryChange,
   onGenerateReport,
+  onGenerateAssetReport,
+  onRunAutoScan,
   onOpenDetail,
+  hasReports,
+  marketScans = [],
+  marketLoading,
+  backendHealth,
 }: OverviewProps) {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [sources, setSources] = useState<SourceHealth[]>([]);
@@ -281,29 +347,37 @@ export function Overview({
     };
   }, [sources]);
 
+  const btcMarketScan = marketScans.find((scan) => scan.asset === "BTC");
+  const ethMarketScan = marketScans.find((scan) => scan.asset === "ETH");
+
   const priceCards = [
     {
       label: "BTC",
       report: btcReport,
+      fallbackPrice: btcMarketScan?.price_now,
+      fallbackChange: btcMarketScan?.price_change_4h_pct,
       sub: "4h change",
     },
     {
       label: "ETH",
       report: ethReport,
+      fallbackPrice: ethMarketScan?.price_now,
+      fallbackChange: ethMarketScan?.price_change_4h_pct,
       sub: "4h change",
     },
   ].map((item) => {
-    const change = item.report?.price_change_4h_pct;
+    const change = item.report?.price_change_4h_pct ?? item.fallbackChange ?? null;
+    const price = item.report?.price_now ?? item.fallbackPrice ?? null;
     const trend = trendFor(change);
     return {
       label: item.label,
-      value: formatCurrency(item.report?.price_now),
+      value: formatCurrency(price),
       change: formatPercent(change),
       trend,
       sub: item.sub,
-      data: sparkFromPrice(item.report?.price_now, change),
+      data: sparkFromPrice(price, change),
       color: trend === "up" ? "#10B981" : trend === "down" ? "#EF4444" : "#64748B",
-      empty: !item.report,
+      empty: price === null,
     };
   });
 
@@ -414,6 +488,9 @@ export function Overview({
         </div>
       </div>
 
+      {completedReports.length === 0 ? (
+        <EmptyReportState onGenerateAssetReport={onGenerateAssetReport} onRunAutoScan={onRunAutoScan} />
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
           <div className="bg-white rounded-xl border border-slate-100 p-4">
@@ -572,6 +649,7 @@ export function Overview({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

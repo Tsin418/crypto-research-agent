@@ -230,10 +230,12 @@ async def source_health(lookback_hours: int = 24) -> dict[str, Any]:
 
 
 @app.get("/api/research/reports")
-async def list_reports(asset: str | None = None, limit: int = 20) -> dict[str, Any]:
+async def list_reports(asset: str | None = None, limit: int = 20, status: str = "completed") -> dict[str, Any]:
     if asset is not None and asset not in {"BTC", "ETH"}:
         raise HTTPException(status_code=400, detail="asset must be BTC or ETH")
-    reports = STORAGE.list_reports(asset, limit)
+    if status not in {"completed", "processing", "failed", "all"}:
+        raise HTTPException(status_code=400, detail="status must be completed, processing, failed, or all")
+    reports = STORAGE.list_reports(asset, limit, status)
     return {"reports": [report.model_dump() for report in reports]}
 
 

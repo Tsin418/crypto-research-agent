@@ -545,29 +545,51 @@ class Storage:
             updated_at=row["updated_at"],
         )
 
-    def list_reports(self, asset: str | None = None, limit: int = 20) -> list[StoredReport]:
+    def list_reports(self, asset: str | None = None, limit: int = 20, status: str = "completed") -> list[StoredReport]:
         limit = max(1, min(limit, 100))
+        status = status.lower()
         with self._connect() as conn:
             if asset:
-                rows = conn.execute(
-                    """
-                    SELECT id FROM reports
-                    WHERE asset=? AND status='completed'
-                    ORDER BY updated_at DESC
-                    LIMIT ?
-                    """,
-                    (asset, limit),
-                ).fetchall()
+                if status == "all":
+                    rows = conn.execute(
+                        """
+                        SELECT id FROM reports
+                        WHERE asset=?
+                        ORDER BY updated_at DESC
+                        LIMIT ?
+                        """,
+                        (asset, limit),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT id FROM reports
+                        WHERE asset=? AND status=?
+                        ORDER BY updated_at DESC
+                        LIMIT ?
+                        """,
+                        (asset, status, limit),
+                    ).fetchall()
             else:
-                rows = conn.execute(
-                    """
-                    SELECT id FROM reports
-                    WHERE status='completed'
-                    ORDER BY updated_at DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
+                if status == "all":
+                    rows = conn.execute(
+                        """
+                        SELECT id FROM reports
+                        ORDER BY updated_at DESC
+                        LIMIT ?
+                        """,
+                        (limit,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT id FROM reports
+                        WHERE status=?
+                        ORDER BY updated_at DESC
+                        LIMIT ?
+                        """,
+                        (status, limit),
+                    ).fetchall()
         return [report for row in rows if (report := self.get_report(row["id"])) is not None]
 
     def get_latest_report(self, asset: str, time_window: str | None = None) -> StoredReport | None:

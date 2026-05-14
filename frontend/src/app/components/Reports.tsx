@@ -8,6 +8,7 @@ interface BackendReport {
   asset: string | null;
   mode: string | null;
   risk_level: string | null;
+  error_message?: string | null;
   updated_at: string;
 }
 
@@ -19,17 +20,8 @@ interface DisplayReport {
   risk: string;
   updated: string;
   status: string;
+  error?: string | null;
 }
-
-const fallbackReports: DisplayReport[] = [
-  { id: "rpt_8a2f", query: "Analyze why BTC dropped in the past 4 hours", asset: "BTC", mode: "event attribution", risk: "High", updated: "14:28", status: "completed" },
-  { id: "rpt_7b1e", query: "ETH gas spike and validator queue context", asset: "ETH", mode: "state scan", risk: "Medium", updated: "13:12", status: "completed" },
-  { id: "rpt_6c3d", query: "BTC options put-call ratio and downside pressure", asset: "BTC", mode: "risk watch", risk: "Medium", updated: "Yesterday", status: "completed" },
-  { id: "rpt_5d4c", query: "Stablecoin supply contraction watch", asset: "BTC", mode: "state scan", risk: "Low", updated: "May 12", status: "completed" },
-  { id: "rpt_4e5b", query: "Macro risk-off impact on crypto majors", asset: "ETH", mode: "event attribution", risk: "Medium", updated: "May 11", status: "completed" },
-  { id: "rpt_3f6a", query: "Large ETH transfers into exchange wallets", asset: "ETH", mode: "risk watch", risk: "High", updated: "May 10", status: "failed" },
-  { id: "rpt_2g7z", query: "ETF flow and BTC market structure", asset: "BTC", mode: "state scan", risk: "Low", updated: "May 09", status: "completed" },
-];
 
 function RiskBadge({ risk }: { risk: string }) {
   const cls =
@@ -44,7 +36,7 @@ function AssetBadge({ asset }: { asset: string }) {
   return <span className={`text-xs px-2 py-0.5 rounded ${cls}`}>{asset}</span>;
 }
 
-const filterTabs = ["All", "BTC", "ETH", "Completed", "Failed", "Event Attribution", "State Scan", "Risk Watch", "High Risk", "Low Risk"];
+const filterTabs = ["All", "BTC", "ETH", "Completed", "Processing", "Failed", "Event Attribution", "State Scan", "Risk Watch", "High Risk", "Low Risk"];
 
 function titleCase(value: string) {
   return value
@@ -72,13 +64,14 @@ export function Reports({
     ? backendReports.map((report) => ({
         id: report.report_id,
         query: report.user_query,
-        asset: report.asset || "BTC",
+        asset: report.asset || "n/a",
         mode: titleCase(report.mode || "event attribution"),
         risk: titleCase(report.risk_level || (report.status === "failed" ? "high" : "medium")),
         updated: formatUpdated(report.updated_at),
         status: report.status,
+        error: report.error_message,
       }))
-    : fallbackReports;
+    : [];
 
   const completedCount = reports.filter((r) => r.status === "completed").length;
   const failedCount = reports.filter((r) => r.status === "failed").length;
@@ -90,6 +83,7 @@ export function Reports({
       activeFilter === "All" ||
       r.asset === activeFilter ||
       (activeFilter === "Completed" && r.status === "completed") ||
+      (activeFilter === "Processing" && r.status === "processing") ||
       (activeFilter === "Failed" && r.status === "failed") ||
       (activeFilter === "Event Attribution" && r.mode.toLowerCase() === "event attribution") ||
       (activeFilter === "State Scan" && r.mode.toLowerCase() === "state scan") ||
@@ -107,9 +101,18 @@ export function Reports({
       <div>
         <h1 className="text-2xl" style={{ fontWeight: 600 }}>Reports</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Browse persisted backend reports, restore previous dashboard data, and compare recent BTC / ETH research runs.
+          Browse persisted backend reports, including completed, processing, and failed runs.
         </p>
       </div>
+
+      {reports.length === 0 && (
+        <div className="bg-white rounded-xl border border-slate-100 p-5">
+          <div className="text-base text-slate-900" style={{ fontWeight: 600 }}>No reports loaded.</div>
+          <p className="text-sm text-slate-500 mt-1">
+            Generate a report or run Auto Scan to create report-backed dashboard data.
+          </p>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -183,7 +186,7 @@ export function Reports({
                     <th className="text-left pb-2 w-[13%]" style={{ fontWeight: 400 }}>Asset</th>
                     <th className="text-left pb-2 w-[15%]" style={{ fontWeight: 400 }}>Mode</th>
                     <th className="text-left pb-2 w-[10%]" style={{ fontWeight: 400 }}>Risk</th>
-                    <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Updated</th>
+                    <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -198,13 +201,13 @@ export function Reports({
                       <td className="py-3 pr-4 truncate"><AssetBadge asset={r.asset} /></td>
                       <td className="py-3 pr-4 text-slate-500 truncate">{r.mode}</td>
                       <td className="py-3 pr-4 truncate"><RiskBadge risk={r.risk} /></td>
-                      <td className="py-3 text-slate-400 truncate">{r.updated}</td>
+                      <td className="py-3 text-slate-400 truncate" title={r.error || r.updated}>{r.status}</td>
                     </tr>
                   ))}
                   {filtered.length === 0 && (
                     <tr>
                       <td colSpan={5} className="py-8 text-center text-xs text-slate-400">
-                        No reports match the selected filter.
+                        {reports.length === 0 ? "No reports loaded." : "No reports match the selected filter."}
                       </td>
                     </tr>
                   )}
@@ -222,10 +225,10 @@ export function Reports({
               <div className="text-xs text-slate-400 truncate">Selected Report</div>
             </div>
             <h3 className="text-base mb-1 truncate" style={{ fontWeight: 600 }}>
-              {selected.asset} 4h Market Scan
+              {selected ? `${selected.asset} 4h Market Scan` : "No report selected"}
             </h3>
             <p className="text-xs text-slate-500 mb-4 line-clamp-3">
-              Long leverage flush and weak spot demand were identified as primary drivers of the latest {selected.asset} move.
+              {selected?.error || (selected ? `Open this ${selected.asset} run to inspect its status, markdown, and trace.` : "Generate a report to inspect its details here.")}
             </p>
             <div className="text-xs text-slate-400 mb-1">Risk score</div>
             <div className="text-2xl mb-2" style={{ fontWeight: 700 }}>7 / 12</div>
@@ -233,7 +236,8 @@ export function Reports({
               <div className="h-full bg-orange-400 rounded-full" style={{ width: "58%" }} />
             </div>
             <button
-              onClick={() => onOpenDetail?.(selected.id)}
+              onClick={() => selected && onOpenDetail?.(selected.id)}
+              disabled={!selected}
               className="w-full text-sm bg-blue-600 text-white rounded-lg py-2 hover:bg-blue-700 transition-colors"
               style={{ fontWeight: 500 }}
             >

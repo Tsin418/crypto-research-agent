@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sparkline } from "./Sparkline";
 import { shortenHash } from "../../utils/labels";
-import { requestJson } from "../api";
+import { getWorkerApiBaseUrl, requestJson } from "../api";
 
 const emptyTrend = [0, 0, 0, 0, 0, 0, 0];
 
@@ -29,6 +29,17 @@ interface OnchainEvent {
   source: string;
 }
 
+interface WorkerEventRow {
+  asset?: string;
+  tx_hash?: string;
+  amount?: string | number | null;
+  from_label?: string | null;
+  to_label?: string | null;
+  direction?: string | null;
+  timestamp?: string | null;
+  source?: string | null;
+}
+
 function getSnapshotData(snapshot?: SnapshotEnvelope) {
   const data = snapshot?.data;
   if (!data) return {};
@@ -53,6 +64,7 @@ export function OnchainEvents() {
   const [source, setSource] = useState<string>("backend");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +72,7 @@ export function OnchainEvents() {
     async function load() {
       setLoading(true);
       setError(null);
+      setFallbackNote(null);
       try {
         const latest = await requestJson<LatestReport>("/api/research/latest?asset=ETH", "Failed to load latest ETH report");
         const data = await requestJson<ReportData>(`/api/research/report/${latest.report_id}/data`, "Failed to load on-chain report data");
@@ -80,13 +93,46 @@ export function OnchainEvents() {
           };
         });
 
+        if (mapped.length === 0) {
+          throw new Error("Latest ETH report has no on-chain snapshot events.");
+        }
+
         if (!cancelled) {
           setEvents(mapped);
           setSource(onchainSnapshot?.source || "backend");
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+        const reportError = err instanceof Error ? err.message : String(err);
+        try {
+          const workerBaseUrl = getWorkerApiBaseUrl();
+          if (!workerBaseUrl) {
+            throw new Error("Worker API URL is not configured.");
+          }
+          const maxRows = limit === "Limit 50" ? 50 : 100;
+          const worker = await requestJson<{ events: WorkerEventRow[] }>(
+            `${workerBaseUrl}/api/onchain/events?limit=${maxRows}`,
+            "Failed to load Worker on-chain events"
+          );
+          const mapped = (worker.events || []).map((row, index) => ({
+            time: row.timestamp ? new Date(row.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a",
+            asset: row.asset || "ETH",
+            amount: row.amount === undefined || row.amount === null ? "n/a" : String(row.amount),
+            hash: row.tx_hash || `worker-event-${index}`,
+            from: row.from_label || "unknown",
+            to: row.to_label || "unknown",
+            direction: row.direction || "large_transfer",
+            source: row.source || "worker",
+          }));
+          if (!cancelled) {
+            setEvents(mapped);
+            setSource("worker");
+            setFallbackNote(`Report snapshot unavailable; loaded Worker / D1 events instead. ${reportError}`);
+          }
+        } catch (fallbackErr) {
+          if (!cancelled) {
+            setEvents([]);
+            setError(`${reportError} Worker fallback also failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+          }
         }
       } finally {
         if (!cancelled) {
@@ -109,7 +155,7 @@ export function OnchainEvents() {
 
     return [
       { label: "ETH Transfers", value: String(events.length), sub: source, data: emptyTrend, color: "#3B82F6" },
-      { label: "Large Transfers", value: String(events.length), sub: "latest report", data: emptyTrend, color: "#F59E0B" },
+      { label: "Large Transfers", value: String(events.length), sub: source === "worker" ? "Worker / D1" : "latest report", data: emptyTrend, color: "#F59E0B" },
       { label: "Exchange Inflows", value: String(inflows), sub: `${outflows} outflows`, data: emptyTrend, color: "#EF4444" },
       { label: "Label Coverage", value: events.length ? `${coverage}%` : "n/a", sub: "wallet labels", data: emptyTrend, color: "#10B981" },
     ];
@@ -126,6 +172,7 @@ export function OnchainEvents() {
         </p>
       </div>
 
+      {fallbackNote && <div className="bg-blue-50 border border-blue-100 text-blue-700 rounded-xl p-3 text-xs">{fallbackNote}</div>}
       {error && <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-3 text-xs">{error}</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -191,7 +238,7 @@ export function OnchainEvents() {
               ))}
               {!loading && visibleEvents.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">No on-chain events in the latest report snapshot.</td>
+                  <td colSpan={8} className="py-8 text-center text-slate-400">No on-chain events found in report snapshot or Worker / D1 fallback.</td>
                 </tr>
               )}
             </tbody>
