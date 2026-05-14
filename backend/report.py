@@ -53,21 +53,50 @@ def _market_lines(context: ResearchContext) -> list[str]:
         f"- Stablecoin 24h Supply Change: {onchain.get('stablecoin_supply_change_24h')}",
         f"- On-chain Signal: {onchain.get('onchain_signal')}",
     ]
+    # Spot CVD（近似值）
+    spot_bias = market.get("spot_flow_bias")
+    if spot_bias and spot_bias != "unavailable":
+        cvd_4h = market.get("spot_cvd_approx_4h")
+        lines.append(f"- Spot CVD Approx (4h): {cvd_4h} (bias={spot_bias}, method={market.get('method', 'tick_rule')})")
+
+    # EMA 位置关系
+    for period in (20, 50, 200):
+        vs_ema = market.get(f"price_vs_ema{period}")
+        ema_val = market.get(f"ema_{period}")
+        if vs_ema and vs_ema != "unknown" and ema_val is not None:
+            lines.append(f"- Price vs EMA{period}: {vs_ema} (EMA{period}=${ema_val:,.2f})")
+
     if context.macro:
         macro = context.macro.data
         lines.append(f"- Macro Signal: {macro.get('macro_signal')} ({macro.get('macro_confidence')})")
+
+    # ETF 流量行
+    if context.etf:
+        etf = context.etf.data
+        etf_latest = etf.get("btc_etf_net_flow_usd_m") or etf.get("net_flow_usd_m_latest")
+        if etf_latest is not None:
+            lines.append(f"- BTC ETF Net Flow (latest): {etf_latest}M USD ({etf.get('flow_direction', 'unknown')}, intensity={etf.get('flow_intensity', 'unknown')})")
+        elif etf.get("is_stale"):
+            lines.append("- BTC ETF Flow: stale cache, not reliable for this report.")
+
     return lines
 
 
 def _risk_lines(risk: dict) -> list[str]:
-    return [
-        f"Risk Score: {risk['risk_score']}/12 - {risk['risk_level']}",
-        f"- Liquidity Risk: {risk['risk_breakdown']['liquidity_risk']}/3",
-        f"- Leverage Risk: {risk['risk_breakdown']['leverage_risk']}/3",
-        f"- News Risk: {risk['risk_breakdown']['news_risk']}/3",
-        f"- On-chain Risk: {risk['risk_breakdown']['onchain_risk']}/3",
-        f"- Summary: {risk.get('risk_summary')}",
-    ]
+    max_score = risk.get("risk_max_score", 15)
+    breakdown = risk.get("risk_breakdown", {})
+    lines = [f"Risk Score: {risk['risk_score']}/{max_score} - {risk['risk_level']}"]
+    for key, label in (
+        ("liquidity_risk", "Liquidity Risk"),
+        ("leverage_risk", "Leverage Risk"),
+        ("news_risk", "News Risk"),
+        ("onchain_risk", "On-chain Risk"),
+        ("macro_risk", "Macro Risk"),
+    ):
+        if key in breakdown:
+            lines.append(f"- {label}: {breakdown[key]}/3")
+    lines.append(f"- Summary: {risk.get('risk_summary')}")
+    return lines
 
 
 def _evidence_quality_lines(context: ResearchContext) -> list[str]:
@@ -179,6 +208,32 @@ def _factor_lines(context: ResearchContext) -> tuple[list[str], list[str]]:
             bullish.append(f"{event.get('title')} ({event.get('impact_level')})")
         elif event.get("direction") == "bearish":
             bearish.append(f"{event.get('title')} ({event.get('impact_level')})")
+
+    # ETF factors
+    if context.etf:
+        etf = context.etf.data
+        etf_dir = etf.get("flow_direction")
+        etf_intensity = etf.get("flow_intensity")
+        if etf_dir == "inflow" and etf_intensity == "high":
+            bullish.append(f"BTC ETF high inflow ({etf.get('btc_etf_net_flow_usd_m')}M USD).")
+        elif etf_dir == "outflow" and etf_intensity == "high":
+            bearish.append(f"BTC ETF high outflow ({abs(etf.get('btc_etf_net_flow_usd_m') or 0)}M USD).")
+        elif etf_dir == "outflow":
+            bearish.append(f"BTC ETF outflow detected ({etf.get('btc_etf_net_flow_usd_m')}M USD).")
+
+    # Macro factors
+    if context.macro:
+        macro = context.macro.data
+        macro_signal = macro.get("macro_signal")
+        if macro_signal == "risk_off":
+            bearish.append("Macro risk-off signal (QQQ down, VIX up).")
+        elif macro_signal == "risk_on":
+            bullish.append("Macro risk-on signal (QQQ up, DXY down).")
+        elif macro_signal == "rates_pressure":
+            bearish.append(f"US10Y yield rising ({macro.get('us10y_change_bp')} bp), pressuring risk assets.")
+        elif macro_signal == "dollar_pressure":
+            bearish.append(f"DXY strengthening ({macro.get('dxy_change_24h_pct')}%), pressuring crypto.")
+
     return bullish or ["No clearly bullish factor is confirmed."], bearish or ["No clearly bearish factor is confirmed."]
 
 
@@ -257,6 +312,11 @@ def local_report(context: ResearchContext) -> str:
     if not any(layer.errors for layer in layers):
         lines.append("- No source-level errors were recorded for this report.")
 
+    # Spot CVD 近似说明
+    spot_bias_dl = context.market.data.get("spot_flow_bias")
+    if spot_bias_dl and spot_bias_dl != "unavailable":
+        lines.append("- Spot CVD is an approximation from public trades (not exchange-wide CVD). Treat direction with caution.")
+
     lines.extend(["", "## Evidence Quality", *_evidence_quality_lines(context)])
 
     lines.extend(["", "## Disclaimer", DISCLAIMER])
@@ -281,6 +341,9 @@ async def generate_report(context: ResearchContext, llm: DeepSeekClient) -> str:
         "Prefer: 'A large transfer to a labeled exchange address may indicate potential sell-side preparation, "
         "but attribution confidence is limited.' "
         "Exchange-to-exchange transfers are internal venue flow with low attribution confidence. "
+        "If macro context is available (risk_on/risk_off/rates_pressure/dollar_pressure), include it "
+        "as a supporting or counter factor. If ETF flow data is available, include it in the relevant section. "
+        "If spot CVD approximation is available, mention it with the explicit caveat that it is not exact CVD. "
         f"Mode-specific format: {mode_instruction} Always include the exact disclaimer."
     )
     payload = context.model_dump()
@@ -312,6 +375,12 @@ def local_chinese_auto_report(context: ResearchContext) -> str:
         f"- 4小时变化：{change_text}",
         f"- 24小时变化：{market.get('price_change_24h_pct') if market.get('price_change_24h_pct') is not None else '当前数据不足以确认'}",
         f"- 成交量：{market.get('volume_24h') or market.get('spot_turnover_24h') or '当前数据不足以确认'}",
+    ]
+    spot_bias_cn = market.get("spot_flow_bias")
+    if spot_bias_cn and spot_bias_cn != "unavailable":
+        bias_label = "买盘主导" if spot_bias_cn == "buy_pressure" else "卖盘主导" if spot_bias_cn == "sell_pressure" else "中性"
+        lines.append(f"- 现货主动成交方向（近似CVD）：{bias_label}（方法={market.get('method', 'tick_rule')}，非精确CVD）")
+    lines.extend([
         "",
         "## 可能驱动因素",
         (
@@ -330,6 +399,29 @@ def local_chinese_auto_report(context: ResearchContext) -> str:
         f"- Funding Rate：{derivatives.get('funding_rate_now') if derivatives.get('funding_rate_now') is not None else '当前数据不足以确认'}",
         f"- Open Interest 24小时变化：{derivatives.get('open_interest_change_24h_pct') if derivatives.get('open_interest_change_24h_pct') is not None else '当前数据不足以确认'}",
         f"- 24小时已追踪多头/空头清算：{derivatives.get('long_liquidations_24h')} / {derivatives.get('short_liquidations_24h')}（不是全市场清算）",
+        "",
+        "## 宏观背景",
+    ])
+    if context.macro:
+        macro = context.macro.data
+        macro_signal = macro.get("macro_signal", "unavailable")
+        macro_confidence = macro.get("macro_confidence", "low")
+        lines.append(f"- 宏观信号：{macro_signal}（置信度={macro_confidence}）")
+        qqq = macro.get("qqq_change_24h_pct") or macro.get("nasdaq_change_24h_pct")
+        dxy = macro.get("dxy_change_24h_pct")
+        vix = macro.get("vix_change_24h_pct")
+        us10y = macro.get("us10y_change_bp")
+        if qqq is not None:
+            lines.append(f"- QQQ/Nasdaq 24h变化：{qqq:.2f}%")
+        if dxy is not None:
+            lines.append(f"- DXY 24h变化：{dxy:.2f}%")
+        if vix is not None:
+            lines.append(f"- VIX 24h变化：{vix:.2f}%")
+        if us10y is not None:
+            lines.append(f"- US10Y 变化：{us10y:.1f} bp")
+    else:
+        lines.append("- 宏观数据不可用")
+    lines.extend([
         "",
         "## 链上信号",
         onchain.get("onchain_signal") or "当前数据不足以确认。",
@@ -358,7 +450,7 @@ def local_chinese_auto_report(context: ResearchContext) -> str:
         "",
         "## 风险提示",
         CHINESE_DISCLAIMER,
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -370,10 +462,13 @@ async def generate_chinese_auto_report(context: ResearchContext, llm: DeepSeekCl
         "2. 不要给出买入、卖出、持有、加杠杆等交易建议。\n"
         "3. 不要使用英文标题，除非是 BTC、ETH、ETF、Funding Rate 等行业术语。\n"
         "4. 报告面向个人研究使用，风格简洁、清晰、偏投研。\n"
-        "5. 如果数据不足，请明确说明“当前数据不足以确认”。\n"
+        "5. 如果数据不足，请明确说明\u201c当前数据不足以确认\u201d。\n"
         "6. 必须包含风险提示。\n"
         "7. 涉及清算、CVD、ETF、稳定币供应时，必须说明：清算是已追踪样本不是全市场；spot CVD 是近似值不是精确 CVD；ETF flow 是 best effort 且可能滞后；稳定币供应是流动性代理不是直接买盘。\n"
-        "8. 链上大额转账措辞规则：除非目标地址是已确认的交易所地址且证据确凿，否则绝对不要写“鲸鱼在卖”。应优先使用：“一笔大额转账至已标记的交易所地址可能表明潜在的卖盘准备，但归因置信度有限。”交易所之间的转账为内部调拨，归因置信度低。"
+        "8. 链上大额转账措辞规则：除非目标地址是已确认的交易所地址且证据确凿，否则绝对不要写\u201c鲸鱼在卖\u201d。应优先使用：\u201c一笔大额转账至已标记的交易所地址可能表明潜在的卖盘准备，但归因置信度有限。\u201d交易所之间的转账为内部调拨，归因置信度低。\n"
+        "9. 如果提供了宏观背景数据（macro_signal、DXY、VIX、US10Y等），在报告中增加\u201c宏观背景\u201d段落。\n"
+        "10. 如果提供了 ETF 流量数据，在\u201c衍生品信号\u201d段落中引用。\n"
+        "11. 如果提供了 Spot CVD 近似数据，引用时明确标注\u201c近似CVD，非精确交易所CVD\u201d。"
     )
     user = {
         "required_format": (

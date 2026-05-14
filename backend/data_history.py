@@ -30,6 +30,10 @@ LAYER_METRICS = {
         "exchange_inflow_count",
     ),
     "etf_flow": ("btc_etf_net_flow_usd_m",),
+    "spot_flow": (
+        "spot_cvd_approx_1h",
+        "spot_cvd_approx_4h",
+    ),
 }
 
 

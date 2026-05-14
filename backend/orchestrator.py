@@ -41,7 +41,7 @@ async def build_research_context(settings: Settings, request: ReportRequest, sto
     derivatives.data = enrich_with_history(storage, intent.asset, "derivatives", derivatives.data)
     onchain.data = enrich_with_history(storage, intent.asset, "onchain", onchain.data)
     etf.data = enrich_with_history(storage, intent.asset, "etf_flow", etf.data)
-    risk = compute_risk(market.data, derivatives.data, news.data, onchain.data)
+    risk = compute_risk(market.data, derivatives.data, news.data, onchain.data, etf.data, macro.data)
     attribution = build_attribution(intent.asset, market.data, derivatives.data, news.data, onchain.data, etf.data, macro.data)
     return ResearchContext(
         request=request,

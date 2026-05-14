@@ -93,7 +93,7 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         data=merged_market,
         errors=[*market_4h.errors, *market.errors],
     )
-    risk = compute_risk(market_layer.data, derivatives.data, news.data, onchain.data)
+    risk = compute_risk(market_layer.data, derivatives.data, news.data, onchain.data, etf.data)
     attribution = build_attribution(asset, market_layer.data, derivatives.data, news.data, onchain.data, etf.data, macro.data)
     request = ReportRequest(query=f"{asset} 过去4小时中文市场研究", asset=asset, time_window=time_window)
     return ResearchContext(
