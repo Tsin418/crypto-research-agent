@@ -9,6 +9,41 @@ from backend.models import DISCLAIMER, ResearchContext
 
 CHINESE_DISCLAIMER = "本报告仅用于研究和信息参考，不构成任何投资建议。"
 
+
+def _sanitize_error_message(raw: str) -> str:
+    """Convert raw HTTP/network errors into user-friendly summaries."""
+    raw_lower = raw.lower()
+    if "403" in raw_lower or "forbidden" in raw_lower:
+        return "blocked in current deployment environment"
+    if "401" in raw_lower or "unauthorized" in raw_lower:
+        return "authentication required"
+    if "404" in raw_lower or "not found" in raw_lower:
+        return "endpoint unavailable"
+    if "timeout" in raw_lower or "timed out" in raw_lower:
+        return "request timed out"
+    if "cors" in raw_lower:
+        return "CORS error"
+    if "dns" in raw_lower or "name resolution" in raw_lower or "getaddrinfo" in raw_lower:
+        return "DNS resolution failed"
+    if "connection" in raw_lower or "refused" in raw_lower or "reset" in raw_lower:
+        return "connection failed"
+    if "rate limit" in raw_lower or "429" in raw_lower:
+        return "rate limited"
+    # Strip URLs and long exception names
+    if len(raw) > 80:
+        return "data source error"
+    return raw
+
+
+def _summarize_layer_errors(layer_name: str, errors: list[str]) -> str:
+    """Produce a user-friendly data-limits line for a layer's errors."""
+    provider = layer_name.replace("_", " ").title()
+    cleaned = [_sanitize_error_message(e) for e in errors[:3]]
+    unique = list(dict.fromkeys(cleaned))
+    if len(unique) == 1:
+        return f"- {provider}: {unique[0]}."
+    return f"- {provider}: {'; '.join(unique)}."
+
 FORBIDDEN_PATTERNS = (
     r"\bbuy\b.*\bnow\b",
     r"\bsell\b.*\bimmediately\b",
@@ -40,9 +75,17 @@ def _market_lines(context: ResearchContext) -> list[str]:
     market = context.market.data
     derivatives = context.derivatives.data
     onchain = context.onchain.data
+    tw = (context.intent.time_window or "24h") if context.intent else "24h"
+    target_change = (
+        market.get("price_change_4h_pct") if tw == "4h"
+        else market.get("price_change_7d_pct") if tw == "7d"
+        else market.get("price_change_24h_pct")
+    )
     lines = [
         f"- Price: ${market.get('price_now'):,.2f}" if market.get("price_now") else "- Price: unavailable",
-        f"- 1h / 24h / 7d Change: {market.get('price_change_1h_pct')}% / {market.get('price_change_24h_pct')}% / {market.get('price_change_7d_pct')}%",
+        f"- 1h / 4h / 24h / 7d Change: {market.get('price_change_1h_pct')}% / {market.get('price_change_4h_pct')}% / {market.get('price_change_24h_pct')}% / {market.get('price_change_7d_pct')}%",
+        f"- Target window ({tw}) change: {target_change}%",
+        f"- 24h Volume: {market.get('volume_24h')}",
         f"- 24h Volume: {market.get('volume_24h')}",
         f"- Volume vs 7d: {market.get('volume_ratio_vs_7d')}",
         f"- EMA20 / EMA50 / EMA200: {market.get('ema_20')} / {market.get('ema_50')} / {market.get('ema_200')}",
@@ -306,10 +349,14 @@ def local_report(context: ResearchContext) -> str:
     layers = [context.market, context.derivatives, context.news, context.onchain]
     if context.etf is not None:
         layers.append(context.etf)
+    any_errors = False
     for layer in layers:
         if layer.errors:
-            lines.append(f"- {layer.layer}: {'; '.join(layer.errors[:2])}")
-    if not any(layer.errors for layer in layers):
+            any_errors = True
+            lines.append(_summarize_layer_errors(layer.layer, layer.errors))
+    if any_errors:
+        lines.append("- Attribution confidence has been reduced where data is limited.")
+    else:
         lines.append("- No source-level errors were recorded for this report.")
 
     # Spot CVD 近似说明

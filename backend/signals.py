@@ -3,18 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 
-def _signal(layer: str, name: str, value: Any, direction: str, impact: str, confidence: float) -> dict[str, Any]:
+def _signal(layer: str, name: str, value: Any, direction: str, impact: str, confidence: float, severity: str | None = None) -> dict[str, Any]:
     return {
         "layer": layer,
         "signal_name": name,
         "signal_value": "" if value is None else str(value),
         "direction": direction,
+        "severity": severity,
         "impact_level": impact,
         "confidence": confidence,
     }
 
 
-def extract_normalized_signals(context) -> list[dict[str, Any]]:
+def extract_normalized_signals(context, time_window: str = "24h") -> list[dict[str, Any]]:
     market = context.market.data
     derivatives = context.derivatives.data
     news = context.news.data
@@ -26,11 +27,15 @@ def extract_normalized_signals(context) -> list[dict[str, Any]]:
 
     # ===== Market 层 =====
     market_direction = "neutral"
-    chg24 = market.get("price_change_24h_pct")
-    if chg24 is not None:
-        if chg24 > 1:
+    target_change = (
+        market.get("price_change_4h_pct") if time_window == "4h"
+        else market.get("price_change_7d_pct") if time_window == "7d"
+        else market.get("price_change_24h_pct")
+    )
+    if target_change is not None:
+        if target_change > 1:
             market_direction = "bullish"
-        elif chg24 < -1:
+        elif target_change < -1:
             market_direction = "bearish"
     signals.append(_signal("market", "market_signal", market.get("market_signal"), market_direction, "medium", 0.72))
     signals.append(_signal("market", "volume_ratio_vs_7d", market.get("volume_ratio_vs_7d"), "neutral", "medium", 0.66))
@@ -125,7 +130,11 @@ def extract_normalized_signals(context) -> list[dict[str, Any]]:
         signals.append(_signal("macro", "macro_confidence", macro.get("macro_confidence", "low"), "neutral", "low", 0.55))
 
     # ===== Risk 层 =====
-    signals.append(_signal("risk", "risk_score", risk.get("risk_score"), risk.get("risk_level", "neutral"), "high", 0.86))
+    signals.append(_signal("risk", "risk_score", risk.get("risk_score"), "neutral", "high", 0.86, severity=risk.get("risk_level", "neutral")))
+    if risk.get("risk_confidence") is not None:
+        signals.append(_signal("risk", "risk_confidence", risk.get("risk_confidence"), "neutral", "medium", 0.75))
+    if risk.get("data_coverage"):
+        signals.append(_signal("risk", "data_coverage", str(risk.get("data_coverage")), "neutral", "low", 0.60))
     for dim_name in ("liquidity_risk", "leverage_risk", "news_risk", "onchain_risk", "macro_risk"):
         dim_score = risk.get("risk_breakdown", {}).get(dim_name)
         if dim_score is not None:

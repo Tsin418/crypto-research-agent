@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 
-def _liquidity_risk(market: dict) -> int:
-    change = market.get("price_change_24h_pct")
+def _target_change(market: dict, time_window: str) -> float | None:
+    if time_window == "4h":
+        return market.get("price_change_4h_pct")
+    if time_window == "7d":
+        return market.get("price_change_7d_pct")
+    return market.get("price_change_24h_pct")
+
+
+def _liquidity_risk(market: dict, time_window: str = "24h") -> int:
+    change = _target_change(market, time_window)
     volume_ratio = market.get("volume_ratio_vs_7d")
     spot_bias = market.get("spot_flow_bias")
 
@@ -126,15 +134,42 @@ def risk_level(score: int) -> str:
     return "high"
 
 
-def compute_risk(market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None, macro: dict | None = None) -> dict:
+def compute_risk(market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None, macro: dict | None = None, time_window: str = "24h") -> dict:
     breakdown = {
-        "liquidity_risk": _liquidity_risk(market),
+        "liquidity_risk": _liquidity_risk(market, time_window),
         "leverage_risk": _leverage_risk(derivatives),
         "news_risk": _news_risk(news, etf),
         "onchain_risk": _onchain_risk(onchain),
         "macro_risk": _macro_risk(macro),
     }
     score = sum(breakdown.values())
+
+    # Calculate data coverage
+    funding_available = derivatives.get("funding_rate_now") is not None
+    oi_available = derivatives.get("open_interest_change_24h_pct") is not None
+    liq_available = derivatives.get("long_liquidations_24h") is not None or derivatives.get("short_liquidations_24h") is not None
+    derivatives_fields = [funding_available, oi_available, liq_available]
+    derivatives_coverage = sum(derivatives_fields) / len(derivatives_fields) if derivatives_fields else 0
+
+    data_coverage = {
+        "market": "high" if market.get("price_now") is not None else "low",
+        "derivatives": "high" if derivatives_coverage >= 0.66 else "medium" if derivatives_coverage >= 0.33 else "low",
+        "news": "medium" if news.get("events") else "low",
+        "onchain": "medium" if onchain.get("onchain_signal") else "low",
+    }
+    missing_data = []
+    if not funding_available:
+        missing_data.append("funding_rate")
+    if not oi_available:
+        missing_data.append("open_interest_change")
+    if not liq_available:
+        missing_data.append("liquidation_data")
+    if not onchain.get("exchange_netflow_24h"):
+        missing_data.append("labeled_exchange_flows")
+
+    risk_confidence = round(0.85 - (len(missing_data) * 0.12), 2)
+    risk_confidence = max(0.25, min(0.90, risk_confidence))
+
     top = max(breakdown, key=breakdown.get)
     return {
         "risk_score": score,
@@ -142,4 +177,7 @@ def compute_risk(market: dict, derivatives: dict, news: dict, onchain: dict, etf
         "risk_level": risk_level(score),
         "risk_breakdown": breakdown,
         "risk_summary": f"{top.replace('_', ' ').title()} is the largest current contributor to the risk score.",
+        "risk_confidence": risk_confidence,
+        "data_coverage": data_coverage,
+        "missing_data": missing_data,
     }

@@ -42,6 +42,15 @@ def _signal(
     long_liq: float | None,
     short_liq: float | None,
 ) -> str:
+    # Require at least 2 of 3 key metrics (oi, funding, liquidations) for any signal
+    key_metrics = [
+        oi_change is not None,
+        funding_now is not None or funding_8h_ago is not None,
+        long_liq is not None or short_liq is not None,
+    ]
+    if sum(key_metrics) < 2:
+        return "derivatives_data_limited"
+
     long_flush = long_liq is not None and short_liq is not None and long_liq > short_liq * 2
     if oi_change is not None and oi_change <= -5 and long_flush:
         return "leverage_flush"
@@ -763,6 +772,20 @@ async def fetch_derivatives(settings: Settings, asset: str, storage=None) -> Lay
             *(["Some derivatives providers failed or returned incomplete data."] if errors else []),
         ],
     )
+    key_metrics_available = sum([
+        merged_funding_now is not None,
+        merged_oi_now is not None,
+        long_liq is not None or short_liq is not None,
+    ])
+    data["derivatives_data_coverage"] = (
+        "high" if key_metrics_available >= 3
+        else "medium" if key_metrics_available >= 2
+        else "low"
+    )
+    data["derivatives_key_metrics_available"] = key_metrics_available
+    if key_metrics_available < 2:
+        data["derivatives_signal"] = "derivatives_data_limited"
+
     data["open_interest_change_24h_pct_meta"] = metric_meta(
         methodology="Best-effort 24h open interest change from the first available public provider.",
         confidence=0.65 if merged_oi_change is not None else 0.25,

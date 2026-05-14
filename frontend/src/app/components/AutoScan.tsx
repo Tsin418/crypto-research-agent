@@ -1,10 +1,46 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sparkline } from "./Sparkline";
-import { Play, Loader2 } from "lucide-react";
+import { Play, Loader2, TrendingDown, TrendingUp, Minus } from "lucide-react";
 import { requestJson } from "../api";
 
-const btcData = [103200, 102800, 103100, 102600, 102100, 101900, 102430];
-const ethData = [3400, 3390, 3410, 3415, 3420, 3418, 3420];
+const emptySparkData = [0, 0, 0, 0, 0, 0, 0];
+
+function trendFor(change: number | null | undefined) {
+  if (change === null || change === undefined || change === 0) return "neutral";
+  return change > 0 ? "up" : "down";
+}
+
+function sparkFromPrice(price: number | null | undefined, changePct: number | null | undefined) {
+  if (!price || changePct === null || changePct === undefined || !Number.isFinite(price) || !Number.isFinite(changePct)) {
+    return emptySparkData;
+  }
+  const start = price / (1 + changePct / 100);
+  const mid = (start + price) / 2;
+  return [start, start * 0.998, mid, mid * 1.001, price * 0.999, price * 1.0005, price];
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: value >= 1000 ? 0 : 2,
+  }).format(value);
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+interface MarketScanRecord {
+  asset: "BTC" | "ETH";
+  price_now: number | null;
+  price_change_4h_pct: number | null;
+  direction: "rising" | "falling" | "neutral";
+  direction_label_zh: string;
+  created_at: string;
+}
 
 const processSteps = [
   "Fetching market data",
@@ -35,10 +71,21 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
   const [running, setRunning] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
   const [reports, setReports] = useState<AutoScanReport[]>([]);
+  const [marketScans, setMarketScans] = useState<MarketScanRecord[]>([]);
   const [scanLog, setScanLog] = useState([
     { time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), msg: "Auto scan ready", status: "info" },
   ]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scan", "Failed to load market prices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assets: ["BTC", "ETH"], force_refresh: false }),
+    })
+      .then((payload) => setMarketScans(payload.results || []))
+      .catch(() => {});
+  }, []);
 
   async function handleRun() {
     setRunning(true);
@@ -174,34 +221,45 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
 
       {/* BTC + ETH price cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white rounded-xl border border-slate-100 p-5">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-lg" style={{ fontWeight: 600 }}>BTC</span>
-            <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Falling</span>
-          </div>
-          <div className="flex items-end justify-between">
-            <div>
-              <div className="text-3xl" style={{ fontWeight: 700 }}>$102,430</div>
-              <div className="text-sm text-red-500 mt-1">4h change −1.82%</div>
-              <div className="text-xs text-slate-400 mt-1">Exceeded −1.5% 4h downside threshold</div>
+        {(["BTC", "ETH"] as const).map((asset) => {
+          const scan = marketScans.find((s) => s.asset === asset);
+          const price = scan?.price_now ?? null;
+          const change = scan?.price_change_4h_pct ?? null;
+          const direction = scan?.direction || "neutral";
+          const trend = trendFor(change);
+          const directionLabel = direction === "falling" ? "Falling" : direction === "rising" ? "Rising" : "Neutral";
+          const directionColor = direction === "falling" ? "bg-red-100 text-red-700" : direction === "rising" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600";
+          const changeColor = trend === "down" ? "text-red-500" : trend === "up" ? "text-green-600" : "text-slate-500";
+          const sparkColor = trend === "down" ? "#EF4444" : trend === "up" ? "#10B981" : "#64748B";
+          const thresholdNote = direction === "falling" ? "Exceeded downside threshold" : direction === "rising" ? "Exceeded upside threshold" : "Move stayed inside threshold band";
+          const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
+
+          return (
+            <div key={asset} className="bg-white rounded-xl border border-slate-100 p-5">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-lg" style={{ fontWeight: 600 }}>{asset}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${directionColor}`}>{price ? directionLabel : "No data"}</span>
+              </div>
+              <div className="flex items-end justify-between">
+                <div>
+                  <div className="text-3xl" style={{ fontWeight: 700 }}>{formatCurrency(price)}</div>
+                  <div className={`text-sm mt-1 flex items-center gap-1 ${changeColor}`}>
+                    <TrendIcon size={12} />
+                    {formatPercent(change)}
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1">{price ? thresholdNote : "Run a scan to load market data"}</div>
+                </div>
+                <Sparkline data={sparkFromPrice(price, change)} color={sparkColor} width={110} height={50} />
+              </div>
+              {scan && (
+                <div className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-50 text-[10px] text-slate-400">
+                  <span>Source: market scan</span>
+                  <span>Snapshot: {new Date(scan.created_at).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+              )}
             </div>
-            <Sparkline data={btcData} color="#EF4444" width={110} height={50} />
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-slate-100 p-5">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-lg" style={{ fontWeight: 600 }}>ETH</span>
-            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Neutral</span>
-          </div>
-          <div className="flex items-end justify-between">
-            <div>
-              <div className="text-3xl" style={{ fontWeight: 700 }}>$3,420</div>
-              <div className="text-sm text-green-600 mt-1">4h change +0.42%</div>
-              <div className="text-xs text-slate-400 mt-1">Move stayed inside threshold band</div>
-            </div>
-            <Sparkline data={ethData} color="#10B981" width={110} height={50} />
-          </div>
-        </div>
+          );
+        })}
       </div>
 
       {/* Processing steps — responsive grid */}
@@ -242,9 +300,14 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <h3 className="text-sm mb-3" style={{ fontWeight: 600 }}>Latest Auto Report</h3>
-          <div className="text-base mb-3 truncate" style={{ fontWeight: 600 }}>
+          <div className="text-base mb-1 truncate" style={{ fontWeight: 600 }}>
             {latestReport ? `${latestReport.asset} ${window} Market Scan Report` : "Latest Auto Report"}
           </div>
+          {latestReport && (
+            <div className="text-[10px] text-slate-400 mb-2">
+              Report ID: {latestReport.report_id} · {latestReport.updated_at ? new Date(latestReport.updated_at).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}
+            </div>
+          )}
           <div className="overflow-x-auto w-full">
             <table className="w-full text-xs mb-4">
               <tbody>

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Copy, Download, ExternalLink, GitBranch, ChevronDown, ChevronUp } from "lucide-react";
 import { labelForField, shortenHash } from "../../utils/labels";
+import { requestJson } from "../api";
 
 interface ReportDetailProps {
   reportId?: string;
@@ -12,8 +13,40 @@ interface ReportDetailProps {
   riskLevel?: string | null;
   updatedAt?: string;
   errorMessage?: string;
+  dashboardData?: DashboardData;
   onBack?: () => void;
   onOpenTrace?: () => void;
+}
+
+interface DashboardData {
+  report_id: string;
+  snapshots: Record<string, SnapshotEnvelope>;
+  normalized_signals: NormalizedSignal[];
+  api_call_logs: ApiCallLog[];
+}
+
+interface SnapshotEnvelope {
+  source?: string;
+  created_at?: string;
+  data?: Record<string, unknown> | { data?: Record<string, unknown>; errors?: string[] };
+}
+
+interface NormalizedSignal {
+  layer?: string;
+  signal_name?: string;
+  signal_value?: string;
+  direction?: string;
+  impact_level?: string;
+  confidence?: number;
+}
+
+interface ApiCallLog {
+  provider?: string;
+  endpoint?: string;
+  status_code?: number | null;
+  latency_ms?: number | null;
+  error_message?: string | null;
+  created_at?: string;
 }
 
 type DetailTab = "overview" | "evidence" | "dataquality" | "apilogs" | "markdown";
@@ -26,191 +59,36 @@ const TABS: { id: DetailTab; label: string }[] = [
   { id: "markdown", label: "Markdown" },
 ];
 
-// — Data —
+function getSnapshotData(snapshot?: SnapshotEnvelope): Record<string, unknown> {
+  const data = snapshot?.data;
+  if (!data) return {};
+  if ("data" in data && data.data && typeof data.data === "object") return data.data as Record<string, unknown>;
+  return data as Record<string, unknown>;
+}
 
-const marketSnapshot: { label: string; value: string }[] = [
-  { label: "price_now", value: "$102,430" },
-  { label: "price_change_1h_pct", value: "-0.41%" },
-  { label: "price_change_4h_pct", value: "-1.82%" },
-  { label: "price_change_24h_pct", value: "-2.71%" },
-  { label: "price_change_7d_pct", value: "-4.92%" },
-  { label: "volume_24h", value: "$48.2B" },
-  { label: "volume_ratio_vs_7d", value: "1.18x" },
-  { label: "market_cap", value: "$2.02T" },
-  { label: "market_signal", value: "bearish" },
-  { label: "spot_turnover_24h", value: "$18.4B" },
-  { label: "spot_flow_bias", value: "sell-heavy" },
-  { label: "spot_cvd_approx_4h", value: "-$142M" },
-  { label: "price_vs_ema20", value: "below" },
-  { label: "price_vs_ema50", value: "below" },
-  { label: "price_vs_ema200", value: "above" },
-];
+function formatCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: value >= 1000 ? 0 : 2,
+  }).format(value);
+}
 
-const riskBreakdown = [
-  { label: "Derivatives", value: 3, max: 3 },
-  { label: "Spot flow", value: 2, max: 3 },
-  { label: "News / Macro", value: 1, max: 2 },
-  { label: "On-chain", value: 1, max: 2 },
-  { label: "ETF flow", value: 0, max: 2 },
-];
+function formatPercent(value: number | null | undefined, maxDigits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return `${value > 0 ? "+" : ""}${value.toFixed(maxDigits)}%`;
+}
 
-const drivers = [
-  {
-    type: "Primary",
-    color: "bg-blue-100 text-blue-700",
-    driver: "Long leverage flush",
-    explanation: "Funding rate inverted and OI dropped 8.4% during the 4h window, indicating forced long unwinding.",
-    score: 2.84,
-    confidence: 0.78,
-    direction: "bearish",
-    causality: "high",
-  },
-  {
-    type: "Secondary",
-    color: "bg-orange-100 text-orange-700",
-    driver: "Weak spot demand",
-    explanation: "Spot CVD turned negative; sell-side flow dominated centralized exchanges.",
-    score: 2.12,
-    confidence: 0.66,
-    direction: "bearish",
-    causality: "medium",
-  },
-  {
-    type: "Noise",
-    color: "bg-slate-100 text-slate-600",
-    driver: "Stablecoin supply chatter",
-    explanation: "USDT supply changed within normal range; no causal contribution detected.",
-    score: 0.41,
-    confidence: 0.32,
-    direction: "neutral",
-    causality: "low",
-  },
-];
+function formatNum(value: number | null | undefined, maxDigits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "n/a";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: maxDigits }).format(value);
+}
 
-const signals = [
-  { layer: "derivatives", name: "Funding rate", value: "-0.012%", direction: "bearish", impact: "high", confidence: 0.81 },
-  { layer: "derivatives", name: "Open interest", value: "-8.4%", direction: "bearish", impact: "high", confidence: 0.77 },
-  { layer: "market", name: "Spot CVD 4h", value: "-$142M", direction: "bearish", impact: "high", confidence: 0.74 },
-  { layer: "derivatives", name: "Put/call ratio", value: "1.31", direction: "bearish", impact: "medium", confidence: 0.62 },
-  { layer: "etf_flow", name: "ETF net flow", value: "-$180M", direction: "bearish", impact: "medium", confidence: 0.70 },
-  { layer: "macro", name: "DXY 4h", value: "+0.31%", direction: "bearish", impact: "low", confidence: 0.55 },
-  { layer: "onchain", name: "Exchange inflow", value: "1,240 BTC", direction: "bearish", impact: "medium", confidence: 0.61 },
-  { layer: "news", name: "Sentiment", value: "risk-off", direction: "bearish", impact: "medium", confidence: 0.58 },
-];
-
-const derivativesData = [
-  { k: "provider", v: "Deribit" },
-  { k: "symbol", v: "BTC-PERP" },
-  { k: "funding_rate_now", v: "-0.012%" },
-  { k: "funding_rate_8h_ago", v: "+0.008%" },
-  { k: "funding_rate_change", v: "-0.020%" },
-  { k: "open_interest_now", v: "$12.4B" },
-  { k: "open_interest_change_24h_pct", v: "-8.4%" },
-  { k: "mark_price", v: "$102,415" },
-  { k: "basis_pct", v: "-0.04%" },
-  { k: "put_call_ratio", v: "1.31" },
-  { k: "liquidation_bias", v: "long-skewed" },
-  { k: "long_liquidations_24h", v: "$142M" },
-];
-
-const newsEvents = [
-  {
-    title: "Macro risk-off pressures crypto majors",
-    source: "Reuters",
-    url: "#",
-    direction: "bearish",
-    impact: "high",
-    category: "macro",
-    confidence: 0.74,
-    reason: "DXY strength + treasury yields breaking range.",
-  },
-  {
-    title: "BTC derivatives flush aligned with spot weakness",
-    source: "Coindesk",
-    url: "#",
-    direction: "bearish",
-    impact: "medium",
-    category: "derivatives",
-    confidence: 0.68,
-    reason: "Liquidation cascade reported across major venues.",
-  },
-  {
-    title: "ETF outflows continue for 3rd consecutive day",
-    source: "Bloomberg",
-    url: "#",
-    direction: "bearish",
-    impact: "medium",
-    category: "etf",
-    confidence: 0.71,
-    reason: "Net redemption from IBIT/FBTC.",
-  },
-];
-
-const largeTransfers = [
-  { hash: "0x3fa1b29d4c2e8f0a7b3c1d5e6f9a2b4c", amount: "1,240 BTC", from: "Coinbase Custody", to: "Binance", direction: "inflow", ts: "14:18" },
-  { hash: "0x9c4d7e2f1a0b3c5d8e9f2a4b6c8d0e2f", amount: "830 BTC", from: "Unknown", to: "Kraken", direction: "inflow", ts: "13:42" },
-  { hash: "0x71cc059a8b2c4d6e8f0a2b4c6d8e0f2a", amount: "710 BTC", from: "Kraken", to: "Cold wallet", direction: "outflow", ts: "12:55" },
-];
-
-const etfFlowData = [
-  { k: "btc_etf_net_flow_usd_m", v: "-180.4" },
-  { k: "flow_direction", v: "outflow" },
-  { k: "etf_flow_signal", v: "bearish" },
-  { k: "flow_intensity", v: "moderate" },
-  { k: "is_stale", v: "false" },
-  { k: "source", v: "Farside" },
-];
-
-const macroData = [
-  { k: "macro_signal", v: "risk-off" },
-  { k: "macro_confidence", v: "0.62" },
-  { k: "macro_signal_evidence", v: "DXY +0.31%, US10Y +4bp, SPX -0.74%" },
-  { k: "source", v: "FRED + Yahoo" },
-];
-
-const dataQuality = [
-  { layer: "Market", status: "ok", source: "CoinGecko", quality: 0.94 },
-  { layer: "Spot Flow", status: "ok", source: "Binance", quality: 0.88 },
-  { layer: "Derivatives", status: "ok", source: "Deribit", quality: 0.91 },
-  { layer: "News", status: "partial", source: "RSS aggregator", quality: 0.62 },
-  { layer: "On-chain", status: "ok", source: "Alchemy", quality: 0.85 },
-  { layer: "ETF Flow", status: "degraded", source: "ETF Parser", quality: 0.51 },
-  { layer: "Macro", status: "ok", source: "FRED", quality: 0.79 },
-];
-
-const apiLogs = [
-  { provider: "CoinGecko", endpoint: "/coins/markets", status: 200, latency: 412, created: "14:28:11" },
-  { provider: "Deribit", endpoint: "/public/get_book_summary", status: 200, latency: 318, created: "14:28:09" },
-  { provider: "RSS", endpoint: "/feed/crypto", status: 200, latency: 1842, created: "14:28:02" },
-  { provider: "ETF Parser", endpoint: "/etf/flows", status: 502, latency: 5000, created: "14:27:58", error: "upstream timeout" },
-  { provider: "Alchemy", endpoint: "/transfers", status: 200, latency: 287, created: "14:27:51" },
-  { provider: "FRED", endpoint: "/series/observations", status: 200, latency: 612, created: "14:27:44" },
-];
-
-const reportMarkdown = `# BTC 4h Market Scan
-
-## Summary
-BTC declined **-1.82%** in the past 4 hours, driven primarily by *long leverage flush* and weak spot demand.
-
-## Market Bias
-- Direction: **Bearish**
-- Risk Level: **High** (7 / 12)
-- Model Confidence: **Medium** (71%)
-
-## Key Drivers
-- Funding rate inverted to **-0.012%**
-- Open interest contracted **-8.4%**
-- Spot CVD turned negative (**-$142M**)
-
-## On-chain Context (BTC)
-| Event | Amount | Direction |
-|-------|--------|-----------|
-| Exchange inflow | 1,240 BTC | bearish |
-| Whale move | 830 BTC | neutral |
-
-## Disclaimer
-> Research-only output. Not financial advice.
-`;
+function formatLabel(value: string | null | undefined): string {
+  if (!value) return "n/a";
+  return value.replaceAll("_", " ");
+}
 
 // — Shared components —
 
@@ -242,7 +120,7 @@ function ImpactBadge({ i }: { i: string }) {
 
 function StatusPill({ s }: { s: string }) {
   const cls =
-    s === "ok" ? "bg-green-100 text-green-700" :
+    s === "ok" || s === "good" ? "bg-green-100 text-green-700" :
     s === "partial" ? "bg-yellow-100 text-yellow-700" :
     s === "degraded" ? "bg-orange-100 text-orange-700" :
     "bg-red-100 text-red-700";
@@ -279,126 +157,141 @@ function CollapsibleCard({ title, children, defaultOpen = true }: { title: strin
 
 // — Tab content components —
 
-function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwitchTab: (t: DetailTab) => void; onOpenTrace?: () => void }) {
+function TabOverview({
+  asset,
+  reportId,
+  marketData,
+  riskData,
+  attributionData,
+  onSwitchTab,
+  onOpenTrace,
+}: {
+  asset: string;
+  reportId?: string;
+  marketData: Record<string, unknown>;
+  riskData: Record<string, unknown>;
+  attributionData: Record<string, unknown>;
+  onSwitchTab: (t: DetailTab) => void;
+  onOpenTrace?: () => void;
+}) {
+  const priceNow = marketData.price_now as number | null;
+  const change4h = marketData.price_change_4h_pct as number | null;
+  const change24h = marketData.price_change_24h_pct as number | null;
+  const marketSignal = (marketData.market_signal as string) || "n/a";
+  const riskScore = riskData.risk_score as number | null;
+  const riskMax = (riskData.risk_max_score as number) || 12;
+  const riskLevel = (riskData.risk_level as string) || "n/a";
+  const riskBreakdown = (riskData.risk_breakdown as Record<string, number>) || {};
+  const riskSummary = (riskData.risk_summary as string) || "";
+  const primaryDrivers = (attributionData.primary_drivers as Array<Record<string, unknown>>) || [];
+  const secondaryDrivers = (attributionData.secondary_drivers as Array<Record<string, unknown>>) || [];
+  const eventSummary = (attributionData.event_summary as string) || "";
+  const topPrimary = primaryDrivers[0];
+
+  const marketEntries = Object.entries(marketData)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => ({ label: k, value: typeof v === "number" ? formatNum(v) : String(v) }));
+
+  const breakdownEntries = Object.entries(riskBreakdown).map(([k, v]) => ({
+    label: formatLabel(k),
+    value: v,
+    max: 3,
+  }));
+
+  const allDrivers = [
+    ...primaryDrivers.map((d) => ({ ...d, type: "Primary", color: "bg-blue-100 text-blue-700" })),
+    ...secondaryDrivers.map((d) => ({ ...d, type: "Secondary", color: "bg-orange-100 text-orange-700" })),
+  ];
+
+  const trend4h = change4h !== null && change4h !== undefined ? (change4h < 0 ? "down" : "up") : "flat";
+
   return (
     <div className="space-y-4">
-      {/* Hero summary */}
       <div className="bg-white rounded-xl border border-slate-100 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full" style={{ fontWeight: 600 }}>{asset}</span>
-            <span className="text-xs text-slate-500">4h Window · rpt_8a2f</span>
-            <span className="text-xs text-slate-400">Updated 14:28</span>
+            <span className="text-xs text-slate-500">{reportId ? `Report ${reportId.slice(0, 8)}` : "Latest report"}</span>
           </div>
-          <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Partial Data</span>
         </div>
 
-        {/* Price */}
         <div className="flex flex-wrap items-end gap-4 mb-4">
-          <span className="text-4xl" style={{ fontWeight: 700 }}>$102,430</span>
+          <span className="text-4xl" style={{ fontWeight: 700 }}>{formatCurrency(priceNow)}</span>
           <div className="pb-0.5">
-            <div className="text-sm text-red-500" style={{ fontWeight: 500 }}>▼ -1.82% (4h)</div>
-            <div className="text-xs text-red-400">▼ -2.71% (24h)</div>
+            <div className={`text-sm ${trend4h === "down" ? "text-red-500" : "text-green-600"}`} style={{ fontWeight: 500 }}>
+              {trend4h === "down" ? "▼" : "▲"} {formatPercent(change4h)} (4h)
+            </div>
+            <div className={`text-xs ${(change24h || 0) < 0 ? "text-red-400" : "text-green-500"}`}>
+              {formatPercent(change24h)} (24h)
+            </div>
           </div>
         </div>
 
-        {/* Separated badges */}
         <div className="flex flex-wrap gap-2 mb-4">
           <div className="flex items-center gap-1.5 bg-red-50 border border-red-100 rounded-lg px-3 py-1.5">
             <span className="text-xs text-slate-500">Market Bias</span>
-            <span className="text-xs text-red-700" style={{ fontWeight: 600 }}>Bearish</span>
+            <span className="text-xs text-red-700" style={{ fontWeight: 600 }}>{formatLabel(marketSignal)}</span>
           </div>
           <div className="flex items-center gap-1.5 bg-orange-50 border border-orange-100 rounded-lg px-3 py-1.5">
             <span className="text-xs text-slate-500">Risk Level</span>
-            <span className="text-xs text-orange-700" style={{ fontWeight: 600 }}>High · 7 / 12</span>
-          </div>
-          <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-slate-500">Confidence</span>
-            <span className="text-xs text-blue-700" style={{ fontWeight: 600 }}>Medium · 71%</span>
-          </div>
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-            <span className="text-xs text-slate-500">Data Quality</span>
-            <span className="text-xs text-slate-700" style={{ fontWeight: 600 }}>0.79 / Partial</span>
+            <span className="text-xs text-orange-700" style={{ fontWeight: 600 }}>{formatLabel(riskLevel)} · {riskScore ?? "n/a"} / {riskMax}</span>
           </div>
         </div>
 
-        {/* Main driver */}
-        <div className="bg-slate-50 rounded-lg p-3 mb-4">
-          <div className="text-xs text-slate-400 mb-0.5">Main Driver</div>
-          <div className="text-sm text-slate-800" style={{ fontWeight: 600 }}>Long leverage flush + weak spot demand</div>
-          <p className="text-xs text-slate-500 mt-1">
-            Funding rate inverted and open interest contracted -8.4% during the 4h window, indicating forced long unwinding confirmed by spot CVD.
-          </p>
-        </div>
+        {eventSummary ? (
+          <div className="bg-slate-50 rounded-lg p-3 mb-4">
+            <div className="text-xs text-slate-400 mb-0.5">Summary</div>
+            <p className="text-sm text-slate-700">{eventSummary}</p>
+          </div>
+        ) : null}
 
-        {/* Quick action buttons */}
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => onSwitchTab("evidence")}
-            className="text-xs bg-blue-600 text-white rounded-lg px-3 py-1.5 hover:bg-blue-700 transition-colors"
-          >
-            View Evidence
-          </button>
-          <button
-            onClick={onOpenTrace}
-            className="text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-50"
-          >
-            <GitBranch size={11} className="inline mr-1" />View Trace
-          </button>
-          <button
-            onClick={() => onSwitchTab("apilogs")}
-            className="text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-50"
-          >
-            API Logs
-          </button>
-          <button
-            onClick={() => onSwitchTab("markdown")}
-            className="text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-50"
-          >
-            Open Markdown
-          </button>
+          <button onClick={() => onSwitchTab("evidence")} className="text-xs bg-blue-600 text-white rounded-lg px-3 py-1.5 hover:bg-blue-700 transition-colors">View Evidence</button>
+          <button onClick={onOpenTrace} className="text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-50"><GitBranch size={11} className="inline mr-1" />View Trace</button>
+          <button onClick={() => onSwitchTab("apilogs")} className="text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-50">API Logs</button>
+          <button onClick={() => onSwitchTab("markdown")} className="text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-50">Open Markdown</button>
         </div>
       </div>
 
-      {/* Market Snapshot */}
-      <Card title="Market Snapshot">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
-          {marketSnapshot.map((m) => (
-            <div key={m.label} className="bg-slate-50 rounded-lg p-3 min-w-0">
-              <div className="text-slate-400 truncate">{labelForField(m.label)}</div>
-              <div className="text-slate-800 mt-1 truncate" style={{ fontWeight: 600 }}>{m.value}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Risk + Attribution */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="Risk Score">
-          <div className="flex items-end gap-2 mb-2">
-            <span className="text-4xl" style={{ fontWeight: 700 }}>7</span>
-            <span className="text-slate-400 text-sm mb-1">/ 12</span>
-            <Pill label="elevated" color="bg-orange-100 text-orange-700" />
-          </div>
-          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-4">
-            <div className="h-full bg-orange-400 rounded-full" style={{ width: "58%" }} />
-          </div>
-          <div className="space-y-2">
-            {riskBreakdown.map((r) => (
-              <div key={r.label}>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-slate-600">{r.label}</span>
-                  <span className="text-slate-500">{r.value} / {r.max}</span>
-                </div>
-                <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(r.value / r.max) * 100}%` }} />
-                </div>
+      {marketEntries.length > 0 && (
+        <Card title="Market Snapshot">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
+            {marketEntries.map((m) => (
+              <div key={m.label} className="bg-slate-50 rounded-lg p-3 min-w-0">
+                <div className="text-slate-400 truncate">{labelForField(m.label)}</div>
+                <div className="text-slate-800 mt-1 truncate" style={{ fontWeight: 600 }}>{m.value}</div>
               </div>
             ))}
           </div>
-          <p className="text-xs text-slate-500 mt-3 leading-relaxed line-clamp-3">
-            Derivatives and spot flow are aligned. ETF drag confirms the move.
-          </p>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card title="Risk Score">
+          <div className="flex items-end gap-2 mb-2">
+            <span className="text-4xl" style={{ fontWeight: 700 }}>{riskScore ?? "n/a"}</span>
+            <span className="text-slate-400 text-sm mb-1">/ {riskMax}</span>
+            <Pill label={formatLabel(riskLevel)} color="bg-orange-100 text-orange-700" />
+          </div>
+          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-4">
+            <div className="h-full bg-orange-400 rounded-full" style={{ width: `${Math.min(100, ((riskScore || 0) / riskMax) * 100)}%` }} />
+          </div>
+          {breakdownEntries.length > 0 && (
+            <div className="space-y-2">
+              {breakdownEntries.map((r) => (
+                <div key={r.label}>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-slate-600">{r.label}</span>
+                    <span className="text-slate-500">{r.value} / {r.max}</span>
+                  </div>
+                  <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(r.value / r.max) * 100}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {riskSummary && <p className="text-xs text-slate-500 mt-3 leading-relaxed">{riskSummary}</p>}
         </Card>
 
         <div className="lg:col-span-2">
@@ -410,28 +303,30 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
               </button>
             }
           >
-            <div className="bg-blue-50 rounded-lg p-3 mb-3 text-xs text-blue-800">
-              Long leverage flush + weak spot demand driving the {asset} 4h move.
-            </div>
+            {eventSummary && (
+              <div className="bg-blue-50 rounded-lg p-3 mb-3 text-xs text-blue-800">{eventSummary}</div>
+            )}
             <div className="space-y-3">
-              {drivers.map((d) => (
-                <div key={d.driver} className="border border-slate-100 rounded-lg p-3">
+              {allDrivers.length > 0 ? allDrivers.map((d, i) => (
+                <div key={`${d.driver}-${i}`} className="border border-slate-100 rounded-lg p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                     <div className="flex items-center gap-2">
-                      <Pill label={d.type} color={d.color} />
-                      <span className="text-sm text-slate-800 truncate" style={{ fontWeight: 600 }}>{d.driver}</span>
+                      <Pill label={d.type as string} color={d.color as string} />
+                      <span className="text-sm text-slate-800 truncate" style={{ fontWeight: 600 }}>{formatLabel(d.driver as string)}</span>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                      <span>Score {d.score}</span>
+                      <span>Score {formatNum(d.score as number)}</span>
                       <span>·</span>
-                      <span>Conf {d.confidence}</span>
+                      <span>Conf {formatNum(d.confidence as number)}</span>
                       <span>·</span>
-                      <DirBadge d={d.direction} />
+                      <DirBadge d={formatLabel(d.direction as string)} />
                     </div>
                   </div>
-                  <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{d.explanation}</p>
+                  <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{d.explanation as string || "No explanation provided."}</p>
                 </div>
-              ))}
+              )) : (
+                <div className="text-xs text-slate-400 py-4 text-center">No attribution drivers available for this report.</div>
+              )}
             </div>
           </Card>
         </div>
@@ -440,12 +335,50 @@ function TabOverview({ asset, onSwitchTab, onOpenTrace }: { asset: string; onSwi
   );
 }
 
-function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; signalLayer: string; setSignalLayer: (l: string) => void }) {
+function TabEvidence({
+  asset,
+  signals,
+  derivativesData,
+  newsData,
+  onchainData,
+  etfData,
+  macroData,
+  signalLayer,
+  setSignalLayer,
+}: {
+  asset: string;
+  signals: NormalizedSignal[];
+  derivativesData: Record<string, unknown>;
+  newsData: Record<string, unknown>;
+  onchainData: Record<string, unknown>;
+  etfData: Record<string, unknown>;
+  macroData: Record<string, unknown>;
+  signalLayer: string;
+  setSignalLayer: (l: string) => void;
+}) {
   const filteredSignals = signalLayer === "all" ? signals : signals.filter((s) => s.layer === signalLayer);
+
+  const derivEntries = Object.entries(derivativesData)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => ({ k, v: typeof v === "number" ? formatNum(v) : String(v) }));
+
+  const newsEvents = (newsData.events as Array<Record<string, unknown>>) || [];
+  const largeTransfers = (onchainData.large_transfers as Array<Record<string, unknown>>) || [];
+
+  const etfEntries = Object.entries(etfData)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => ({ k, v: typeof v === "number" ? formatNum(v) : String(v) }));
+
+  const macroEntries = Object.entries(macroData)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => ({ k, v: typeof v === "number" ? formatNum(v) : String(v) }));
+
+  const onchainSignal = (onchainData.onchain_signal as string) || "n/a";
+  const largeTransferCount = (onchainData.large_transfer_count as number) || largeTransfers.length;
+  const stablecoinChange = onchainData.stablecoin_supply_change_24h as number | null;
 
   return (
     <div className="space-y-4">
-      {/* Signal Matrix */}
       <Card
         title="Signal Matrix"
         action={
@@ -462,92 +395,90 @@ function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; si
           </div>
         }
       >
-        <p className="text-xs text-slate-500 mb-3">
-          {asset} signals across all evidence layers. Bearish alignment is high across derivatives, market, and ETF data.
-        </p>
+        <p className="text-xs text-slate-500 mb-3">{asset} signals across all evidence layers.</p>
         <div className="overflow-x-auto w-full">
-          <table className="w-full text-xs table-fixed min-w-[500px]">
+          <table className="w-full text-xs min-w-[560px]">
             <thead className="text-slate-400 border-b border-slate-100">
               <tr>
-                <th className="text-left pb-2 w-[15%]" style={{ fontWeight: 400 }}>Layer</th>
-                <th className="text-left pb-2 w-[28%]" style={{ fontWeight: 400 }}>Signal</th>
-                <th className="text-left pb-2 w-[14%]" style={{ fontWeight: 400 }}>Value</th>
-                <th className="text-left pb-2 w-[13%]" style={{ fontWeight: 400 }}>Direction</th>
-                <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Impact</th>
-                <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Confidence</th>
+                <th className="text-left pb-2" style={{ fontWeight: 400 }}>Layer</th>
+                <th className="text-left pb-2" style={{ fontWeight: 400 }}>Signal</th>
+                <th className="text-left pb-2" style={{ fontWeight: 400 }}>Value</th>
+                <th className="text-left pb-2" style={{ fontWeight: 400 }}>Direction</th>
+                <th className="text-left pb-2" style={{ fontWeight: 400 }}>Impact</th>
+                <th className="text-left pb-2" style={{ fontWeight: 400 }}>Confidence</th>
               </tr>
             </thead>
             <tbody>
-              {filteredSignals.map((s) => (
-                <tr key={s.name} className="border-b border-slate-50">
-                  <td className="py-2 text-slate-500 truncate pr-2">{s.layer}</td>
-                  <td className="py-2 text-slate-800 truncate pr-2">{s.name}</td>
-                  <td className="py-2 text-slate-700 truncate pr-2" style={{ fontWeight: 500 }}>{s.value}</td>
-                  <td className="py-2 pr-2"><DirBadge d={s.direction} /></td>
-                  <td className="py-2 pr-2"><ImpactBadge i={s.impact} /></td>
-                  <td className="py-2 text-slate-500 truncate">{s.confidence}</td>
+              {filteredSignals.length > 0 ? filteredSignals.map((s, i) => (
+                <tr key={`${s.layer}-${s.signal_name}-${i}`} className="border-b border-slate-50">
+                  <td className="py-2 text-slate-500 truncate pr-2">{s.layer || "n/a"}</td>
+                  <td className="py-2 text-slate-800 truncate pr-2">{formatLabel(s.signal_name)}</td>
+                  <td className="py-2 text-slate-700 truncate pr-2" style={{ fontWeight: 500 }}>{s.signal_value || "n/a"}</td>
+                  <td className="py-2 pr-2"><DirBadge d={formatLabel(s.direction)} /></td>
+                  <td className="py-2 pr-2"><ImpactBadge i={s.impact_level || "low"} /></td>
+                  <td className="py-2 text-slate-500 truncate">{formatNum(s.confidence)}</td>
                 </tr>
-              ))}
+              )) : (
+                <tr><td colSpan={6} className="py-8 text-center text-slate-400">No normalized signals returned.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
       </Card>
 
-      {/* Derivatives + News */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card title="Derivatives">
           <p className="text-xs text-slate-500 mb-3">
-            Long-side liquidation pressure elevated. Funding rate inverted; open interest contracted 8.4%.
+            {derivEntries.length > 0 ? "Derivatives data from available providers." : "No derivatives data available."}
           </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <tbody>
-                {derivativesData.map((d) => (
-                  <tr key={d.k} className="border-b border-slate-50">
-                    <td className="py-1.5 text-slate-400 pr-4 w-1/2">{labelForField(d.k)}</td>
-                    <td className="py-1.5 text-slate-700" style={{ fontWeight: 500 }}>{d.v}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {derivEntries.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <tbody>
+                  {derivEntries.map((d) => (
+                    <tr key={d.k} className="border-b border-slate-50">
+                      <td className="py-1.5 text-slate-400 pr-4 w-1/2">{labelForField(d.k)}</td>
+                      <td className="py-1.5 text-slate-700" style={{ fontWeight: 500 }}>{d.v}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
 
         <Card title="News Drivers">
           <p className="text-xs text-slate-500 mb-3">
-            Macro and derivatives narratives dominated. ETF outflow stories supported the bearish sentiment.
+            {newsEvents.length > 0 ? "News events classified by direction, impact, and relevance." : "No classified news events."}
           </p>
           <div className="space-y-3">
-            {newsEvents.map((n) => (
-              <div key={n.title} className="border-b border-slate-50 pb-2 last:border-0 min-w-0">
-                <a href={n.url} className="text-xs text-blue-600 hover:underline flex items-start gap-1">
-                  <span className="line-clamp-2">{n.title}</span>
-                  <ExternalLink size={10} className="mt-0.5 shrink-0" />
-                </a>
+            {newsEvents.length > 0 ? newsEvents.slice(0, 8).map((n, i) => (
+              <div key={`${n.title}-${i}`} className="border-b border-slate-50 pb-2 last:border-0 min-w-0">
+                <div className="text-xs text-slate-800 line-clamp-2" style={{ fontWeight: 500 }}>{n.title as string || "Untitled event"}</div>
                 <div className="flex flex-wrap items-center gap-1.5 mt-1 text-xs">
-                  <span className="text-slate-400 truncate max-w-[80px]">{n.source}</span>
-                  <DirBadge d={n.direction} />
-                  <ImpactBadge i={n.impact} />
-                  <Pill label={n.category} />
+                  <span className="text-slate-400 truncate max-w-[80px]">{(n.source as string) || "n/a"}</span>
+                  <DirBadge d={formatLabel(n.direction as string)} />
+                  <ImpactBadge i={(n.impact_level as string) || "low"} />
+                  <Pill label={formatLabel(n.category as string)} />
                 </div>
-                <p className="text-xs text-slate-500 mt-1 line-clamp-2">{n.reason}</p>
               </div>
-            ))}
+            )) : (
+              <div className="text-xs text-slate-400 py-4 text-center">No news events available.</div>
+            )}
           </div>
         </Card>
       </div>
 
-      {/* On-chain + ETF Flow */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card title="On-chain (BTC context)">
+        <Card title={`On-chain (${asset} context)`}>
           <p className="text-xs text-slate-500 mb-3">
-            Moderate exchange inflows detected. No extreme whale accumulation signal.
+            On-chain signal: {formatLabel(onchainSignal)}. Large transfers: {largeTransferCount}.
           </p>
           <div className="grid grid-cols-3 gap-2 text-xs mb-3">
             {[
-              { k: "onchain_signal", v: "bearish" },
-              { k: "large_transfer_count", v: "14" },
-              { k: "stable_supply_24h", v: "+$240M" },
+              { k: "onchain_signal", v: formatLabel(onchainSignal) },
+              { k: "large_transfer_count", v: String(largeTransferCount) },
+              { k: "stablecoin_supply_24h", v: formatCurrency(stablecoinChange) },
             ].map((item) => (
               <div key={item.k} className="bg-slate-50 rounded-lg p-2">
                 <div className="text-slate-400 truncate">{labelForField(item.k)}</div>
@@ -555,87 +486,106 @@ function TabEvidence({ asset, signalLayer, setSignalLayer }: { asset: string; si
               </div>
             ))}
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[320px]">
-              <thead className="text-slate-400 border-b border-slate-100">
-                <tr>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Tx Hash</th>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Amount</th>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>From → To</th>
-                  <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Dir</th>
-                  <th className="text-left pb-1.5" style={{ fontWeight: 400 }}>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {largeTransfers.map((t) => (
-                  <tr key={t.hash} className="border-b border-slate-50">
-                    <td className="py-1.5 pr-2">
-                      <span className="text-slate-500 font-mono text-xs" title={t.hash}>{shortenHash(t.hash)}</span>
-                    </td>
-                    <td className="py-1.5 pr-2 text-slate-700 truncate" style={{ fontWeight: 500 }}>{t.amount}</td>
-                    <td className="py-1.5 pr-2 text-slate-500 text-xs max-w-[100px] truncate" title={`${t.from} → ${t.to}`}>{t.from} → {t.to}</td>
-                    <td className="py-1.5 pr-2"><DirBadge d={t.direction} /></td>
-                    <td className="py-1.5 text-slate-400 whitespace-nowrap">{t.ts}</td>
+          {largeTransfers.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs min-w-[320px]">
+                <thead className="text-slate-400 border-b border-slate-100">
+                  <tr>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Tx Hash</th>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Amount</th>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>From → To</th>
+                    <th className="text-left pb-1.5 pr-2" style={{ fontWeight: 400 }}>Dir</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {largeTransfers.slice(0, 5).map((t, i) => (
+                    <tr key={`${t.hash}-${i}`} className="border-b border-slate-50">
+                      <td className="py-1.5 pr-2">
+                        <span className="text-slate-500 font-mono text-xs" title={(t.hash as string) || ""}>{shortenHash((t.hash as string) || `transfer-${i}`)}</span>
+                      </td>
+                      <td className="py-1.5 pr-2 text-slate-700 truncate" style={{ fontWeight: 500 }}>{formatNum(t.amount as number)}</td>
+                      <td className="py-1.5 pr-2 text-slate-500 text-xs max-w-[100px] truncate">{(t.from_label as string) || "unknown"} → {(t.to_label as string) || "unknown"}</td>
+                      <td className="py-1.5 pr-2"><DirBadge d={formatLabel(t.direction as string)} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
 
         <div className="space-y-4">
-          <Card title="ETF Flow">
-            <p className="text-xs text-slate-500 mb-3">
-              Net outflow of $180M over 24h. Signal is bearish; data from Farside slightly stale.
-            </p>
-            <div className="space-y-2 text-xs">
-              {etfFlowData.map((e) => (
-                <div key={e.k} className="flex justify-between border-b border-slate-50 py-1.5 gap-2">
-                  <span className="text-slate-400">{labelForField(e.k)}</span>
-                  <span className="text-slate-700 truncate text-right" style={{ fontWeight: 500 }}>{e.v}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
+          {etfEntries.length > 0 && (
+            <Card title="ETF Flow">
+              <div className="space-y-2 text-xs">
+                {etfEntries.map((e) => (
+                  <div key={e.k} className="flex justify-between border-b border-slate-50 py-1.5 gap-2">
+                    <span className="text-slate-400">{labelForField(e.k)}</span>
+                    <span className="text-slate-700 truncate text-right" style={{ fontWeight: 500 }}>{e.v}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
 
-          <Card title="Macro Context">
-            <p className="text-xs text-slate-500 mb-3">
-              Risk-off environment. DXY strengthened and US10Y rose, both consistent with the BTC decline.
-            </p>
-            <div className="space-y-2 text-xs">
-              {macroData.map((m) => (
-                <div key={m.k} className="border-b border-slate-50 pb-2 last:border-0">
-                  <div className="text-slate-400">{labelForField(m.k)}</div>
-                  <div className="text-slate-700 mt-0.5 line-clamp-2" style={{ fontWeight: 500 }}>{m.v}</div>
-                </div>
-              ))}
-            </div>
-          </Card>
+          {macroEntries.length > 0 && (
+            <Card title="Macro Context">
+              <div className="space-y-2 text-xs">
+                {macroEntries.map((m) => (
+                  <div key={m.k} className="border-b border-slate-50 pb-2 last:border-0">
+                    <div className="text-slate-400">{labelForField(m.k)}</div>
+                    <div className="text-slate-700 mt-0.5 line-clamp-2" style={{ fontWeight: 500 }}>{m.v}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function TabDataQuality() {
-  const overall = (dataQuality.reduce((a, q) => a + q.quality, 0) / dataQuality.length).toFixed(2);
-  const okCount = dataQuality.filter((q) => q.status === "ok").length;
+function TabDataQuality({ dataQualitySections }: { dataQualitySections: Record<string, Record<string, unknown>> }) {
+  const sections = dataQualitySections || {};
+  const entries = Object.entries(sections).map(([layer, info]) => ({
+    layer: formatLabel(layer),
+    status: (info.status as string) || "unknown",
+    source: (info.source as string) || "n/a",
+    quality: typeof info.overall_data_quality_score === "number" ? info.overall_data_quality_score as number : 0.5,
+  }));
+
+  const overall = entries.length > 0
+    ? entries.reduce((sum, e) => sum + e.quality, 0) / entries.length
+    : 0;
+  const okCount = entries.filter((q) => q.status === "good" || q.status === "ok").length;
+
+  if (entries.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="bg-white rounded-xl border border-slate-100 p-8 text-center text-slate-400 text-sm">
+          No data quality information available for this report.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Overall Score</div>
-          <div className="text-2xl" style={{ fontWeight: 700 }}>{overall}</div>
+          <div className="text-2xl" style={{ fontWeight: 700 }}>{overall.toFixed(2)}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Healthy Layers</div>
-          <div className="text-2xl text-green-600" style={{ fontWeight: 700 }}>{okCount} / {dataQuality.length}</div>
+          <div className="text-2xl text-green-600" style={{ fontWeight: 700 }}>{okCount} / {entries.length}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Status</div>
-          <div className="text-sm text-yellow-700" style={{ fontWeight: 600 }}>Partial — ETF data degraded</div>
+          <div className="text-sm text-slate-700" style={{ fontWeight: 600 }}>
+            {okCount === entries.length ? "All layers healthy" : okCount > entries.length / 2 ? "Partial — some layers degraded" : "Several layers degraded"}
+          </div>
         </div>
       </div>
 
@@ -651,7 +601,7 @@ function TabDataQuality() {
               </tr>
             </thead>
             <tbody>
-              {dataQuality.map((q) => (
+              {entries.map((q) => (
                 <tr key={q.layer} className="border-b border-slate-50">
                   <td className="py-2 pr-4 text-slate-700">{q.layer}</td>
                   <td className="py-2 pr-4"><StatusPill s={q.status} /></td>
@@ -674,13 +624,23 @@ function TabDataQuality() {
   );
 }
 
-function TabAPILogs({ logFilter, setLogFilter }: { logFilter: "all" | "errors"; setLogFilter: (f: "all" | "errors") => void }) {
-  const filteredLogs = logFilter === "errors" ? apiLogs.filter((l) => l.status >= 400) : apiLogs;
-  const errorCount = apiLogs.filter((l) => l.status >= 400).length;
+function TabAPILogs({
+  apiLogs,
+  logFilter,
+  setLogFilter,
+}: {
+  apiLogs: ApiCallLog[];
+  logFilter: "all" | "errors";
+  setLogFilter: (f: "all" | "errors") => void;
+}) {
+  const filteredLogs = logFilter === "errors" ? apiLogs.filter((l) => (l.status_code || 0) >= 400) : apiLogs;
+  const errorCount = apiLogs.filter((l) => (l.status_code || 0) >= 400).length;
+  const avgLatency = apiLogs.length > 0
+    ? Math.round(apiLogs.reduce((a, l) => a + (l.latency_ms || 0), 0) / apiLogs.length)
+    : 0;
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Total API Calls</div>
@@ -692,9 +652,7 @@ function TabAPILogs({ logFilter, setLogFilter }: { logFilter: "all" | "errors"; 
         </div>
         <div className="bg-white rounded-xl border border-slate-100 p-4">
           <div className="text-xs text-slate-500 mb-1">Avg Latency</div>
-          <div className="text-2xl" style={{ fontWeight: 700 }}>
-            {Math.round(apiLogs.reduce((a, l) => a + l.latency, 0) / apiLogs.length)} ms
-          </div>
+          <div className="text-2xl" style={{ fontWeight: 700 }}>{avgLatency} ms</div>
         </div>
       </div>
 
@@ -702,52 +660,43 @@ function TabAPILogs({ logFilter, setLogFilter }: { logFilter: "all" | "errors"; 
         title="API Call Log"
         action={
           <div className="flex gap-1">
-            <button
-              onClick={() => setLogFilter("all")}
-              className={`text-xs px-2 py-0.5 rounded ${logFilter === "all" ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setLogFilter("errors")}
-              className={`text-xs px-2 py-0.5 rounded ${logFilter === "errors" ? "bg-red-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}
-            >
-              Errors only
-            </button>
+            <button onClick={() => setLogFilter("all")} className={`text-xs px-2 py-0.5 rounded ${logFilter === "all" ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}>All</button>
+            <button onClick={() => setLogFilter("errors")} className={`text-xs px-2 py-0.5 rounded ${logFilter === "errors" ? "bg-red-600 text-white" : "text-slate-500 hover:bg-slate-50"}`}>Errors only</button>
           </div>
         }
       >
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-xs table-fixed min-w-[500px]">
-            <thead className="text-slate-400 border-b border-slate-100">
-              <tr>
-                <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Provider</th>
-                <th className="text-left pb-2 w-[28%]" style={{ fontWeight: 400 }}>Endpoint</th>
-                <th className="text-left pb-2 w-[10%]" style={{ fontWeight: 400 }}>Status</th>
-                <th className="text-left pb-2 w-[14%]" style={{ fontWeight: 400 }}>Latency</th>
-                <th className="text-left pb-2 w-[12%]" style={{ fontWeight: 400 }}>Time</th>
-                <th className="text-left pb-2 w-[18%]" style={{ fontWeight: 400 }}>Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredLogs.map((l, i) => (
-                <tr key={i} className="border-b border-slate-50">
-                  <td className="py-2 text-slate-700 truncate pr-2">{l.provider}</td>
-                  <td className="py-2 text-slate-500 truncate pr-2" title={l.endpoint}>{l.endpoint}</td>
-                  <td className="py-2 pr-2">
-                    <Pill
-                      label={String(l.status)}
-                      color={l.status >= 400 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}
-                    />
-                  </td>
-                  <td className="py-2 text-slate-600 truncate pr-2">{l.latency} ms</td>
-                  <td className="py-2 text-slate-400 truncate pr-2">{l.created}</td>
-                  <td className="py-2 text-red-500 truncate" title={l.error ?? ""}>{l.error ?? "—"}</td>
+        {apiLogs.length > 0 ? (
+          <div className="overflow-x-auto w-full">
+            <table className="w-full text-xs min-w-[500px]">
+              <thead className="text-slate-400 border-b border-slate-100">
+                <tr>
+                  <th className="text-left pb-2" style={{ fontWeight: 400 }}>Provider</th>
+                  <th className="text-left pb-2" style={{ fontWeight: 400 }}>Endpoint</th>
+                  <th className="text-left pb-2" style={{ fontWeight: 400 }}>Status</th>
+                  <th className="text-left pb-2" style={{ fontWeight: 400 }}>Latency</th>
+                  <th className="text-left pb-2" style={{ fontWeight: 400 }}>Time</th>
+                  <th className="text-left pb-2" style={{ fontWeight: 400 }}>Error</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filteredLogs.map((l, i) => (
+                  <tr key={i} className="border-b border-slate-50">
+                    <td className="py-2 text-slate-700 truncate pr-2">{l.provider || "n/a"}</td>
+                    <td className="py-2 text-slate-500 truncate pr-2" title={l.endpoint}>{l.endpoint || "n/a"}</td>
+                    <td className="py-2 pr-2">
+                      <Pill label={String(l.status_code ?? "n/a")} color={(l.status_code || 0) >= 400 ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"} />
+                    </td>
+                    <td className="py-2 text-slate-600 truncate pr-2">{l.latency_ms ?? "n/a"} ms</td>
+                    <td className="py-2 text-slate-400 truncate pr-2">{l.created_at ? new Date(l.created_at).toLocaleTimeString() : "n/a"}</td>
+                    <td className="py-2 text-red-500 truncate" title={l.error_message ?? ""}>{l.error_message ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-xs text-slate-400 py-8 text-center">No API call logs for this report yet.</div>
+        )}
       </Card>
     </div>
   );
@@ -758,18 +707,12 @@ function TabMarkdown({ copied, markdown, onCopy }: { copied: boolean; markdown: 
     <div className="space-y-4">
       <CollapsibleCard title="Full Markdown Report">
         <div className="flex gap-2 mb-3">
-          <button
-            onClick={onCopy}
-            className="text-xs border border-slate-200 text-slate-700 rounded-md px-2 py-1 hover:bg-slate-50"
-          >
+          <button onClick={onCopy} className="text-xs border border-slate-200 text-slate-700 rounded-md px-2 py-1 hover:bg-slate-50">
             <Copy size={11} className="inline mr-1" />{copied ? "Copied!" : "Copy"}
-          </button>
-          <button className="text-xs border border-slate-200 text-slate-700 rounded-md px-2 py-1 hover:bg-slate-50">
-            <Download size={11} className="inline mr-1" />Download
           </button>
         </div>
         <pre className="text-xs text-slate-700 bg-slate-50 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap" style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-          {markdown}
+          {markdown || "No markdown report available."}
         </pre>
       </CollapsibleCard>
     </div>
@@ -779,7 +722,7 @@ function TabMarkdown({ copied, markdown, onCopy }: { copied: boolean; markdown: 
 // — Main component —
 
 export function ReportDetail({
-  reportId = "rpt_8a2f",
+  reportId,
   asset = "BTC",
   query,
   reportMarkdown: liveReportMarkdown,
@@ -788,6 +731,7 @@ export function ReportDetail({
   riskLevel,
   updatedAt,
   errorMessage,
+  dashboardData: initialDashboardData,
   onBack,
   onOpenTrace,
 }: ReportDetailProps) {
@@ -795,7 +739,34 @@ export function ReportDetail({
   const [signalLayer, setSignalLayer] = useState<string>("all");
   const [logFilter, setLogFilter] = useState<"all" | "errors">("all");
   const [copied, setCopied] = useState(false);
-  const activeReportMarkdown = liveReportMarkdown || reportMarkdown;
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(initialDashboardData || null);
+
+  useEffect(() => {
+    if (initialDashboardData) {
+      setDashboardData(initialDashboardData);
+      return;
+    }
+    if (!reportId) return;
+    let cancelled = false;
+    requestJson<DashboardData>(`/api/research/report/${reportId}/data`, "Failed to load report data")
+      .then((data) => { if (!cancelled) setDashboardData(data); })
+      .catch(() => { if (!cancelled) setDashboardData(null); });
+    return () => { cancelled = true; };
+  }, [reportId, initialDashboardData]);
+
+  const marketData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.market), [dashboardData]);
+  const riskData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.risk), [dashboardData]);
+  const attributionData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.attribution), [dashboardData]);
+  const derivativesData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.derivatives), [dashboardData]);
+  const newsData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.news), [dashboardData]);
+  const onchainData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.onchain), [dashboardData]);
+  const etfData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.etf_flow), [dashboardData]);
+  const macroData = useMemo(() => getSnapshotData(dashboardData?.snapshots?.macro), [dashboardData]);
+  const signals = dashboardData?.normalized_signals || [];
+  const apiLogs = dashboardData?.api_call_logs || [];
+  const dataQualitySections = (attributionData.data_quality as Record<string, Record<string, unknown>>) || {};
+
+  const activeReportMarkdown = liveReportMarkdown || "No markdown report available.";
   const updatedLabel = updatedAt ? new Date(updatedAt).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : null;
 
   function handleCopy() {
@@ -806,22 +777,18 @@ export function ReportDetail({
 
   return (
     <div>
-      {/* Page header */}
       <div className="p-6 pb-0">
         <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
           <div>
-            <button
-              onClick={onBack}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 mb-2"
-            >
+            <button onClick={onBack} className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 mb-2">
               <ArrowLeft size={12} /> Back
             </button>
             <h1 className="text-2xl" style={{ fontWeight: 600 }}>Report Detail</h1>
             <p className="text-sm text-slate-500 mt-0.5 line-clamp-2 max-w-xl">
-              {query ?? `Analyze why ${asset} dropped in the past 4 hours across market, derivatives, news, on-chain and macro context.`}
+              {query || `Research report for ${asset}`}
             </p>
             <div className="flex flex-wrap gap-2 mt-2">
-              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{reportId}</span>
+              {reportId && <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{reportId.slice(0, 8)}</span>}
               {reportStatus && <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{reportStatus}</span>}
               {riskScore !== undefined && <span className="text-xs bg-orange-50 text-orange-700 px-2 py-0.5 rounded">Risk {riskScore}</span>}
               {riskLevel && <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{riskLevel}</span>}
@@ -829,35 +796,23 @@ export function ReportDetail({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={onOpenTrace}
-              className="flex items-center gap-1.5 text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-2 hover:bg-slate-50"
-            >
+            <button onClick={onOpenTrace} className="flex items-center gap-1.5 text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-2 hover:bg-slate-50">
               <GitBranch size={12} /> Attribution trace
             </button>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-2 hover:bg-slate-50"
-            >
+            <button onClick={handleCopy} className="flex items-center gap-1.5 text-xs border border-slate-200 text-slate-700 rounded-lg px-3 py-2 hover:bg-slate-50">
               <Copy size={12} /> {copied ? "Copied" : "Copy markdown"}
-            </button>
-            <button className="flex items-center gap-1.5 text-xs bg-blue-600 text-white rounded-lg px-3 py-2 hover:bg-blue-700">
-              <Download size={12} /> Download
             </button>
           </div>
         </div>
       </div>
 
-      {/* Sticky tab nav */}
       <nav className="sticky top-0 z-10 bg-white border-b border-slate-100 px-6 flex gap-1 overflow-x-auto">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`text-xs px-4 py-2.5 whitespace-nowrap border-b-2 transition-colors ${
-              activeTab === tab.id
-                ? "border-blue-600 text-blue-600"
-                : "border-transparent text-slate-500 hover:text-slate-800"
+              activeTab === tab.id ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-800"
             }`}
             style={{ fontWeight: activeTab === tab.id ? 600 : 400 }}
           >
@@ -866,26 +821,19 @@ export function ReportDetail({
         ))}
       </nav>
 
-      {/* Tab content */}
       <div className="p-6 space-y-4">
         {errorMessage && (
-          <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-4 text-xs">
-            {errorMessage}
-          </div>
+          <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-4 text-xs">{errorMessage}</div>
         )}
         {activeTab === "overview" && (
-          <TabOverview asset={asset} onSwitchTab={setActiveTab} onOpenTrace={onOpenTrace} />
+          <TabOverview asset={asset} reportId={reportId} marketData={marketData} riskData={riskData} attributionData={attributionData} onSwitchTab={setActiveTab} onOpenTrace={onOpenTrace} />
         )}
         {activeTab === "evidence" && (
-          <TabEvidence asset={asset} signalLayer={signalLayer} setSignalLayer={setSignalLayer} />
+          <TabEvidence asset={asset} signals={signals} derivativesData={derivativesData} newsData={newsData} onchainData={onchainData} etfData={etfData} macroData={macroData} signalLayer={signalLayer} setSignalLayer={setSignalLayer} />
         )}
-        {activeTab === "dataquality" && <TabDataQuality />}
-        {activeTab === "apilogs" && (
-          <TabAPILogs logFilter={logFilter} setLogFilter={setLogFilter} />
-        )}
-        {activeTab === "markdown" && (
-          <TabMarkdown copied={copied} markdown={activeReportMarkdown} onCopy={handleCopy} />
-        )}
+        {activeTab === "dataquality" && <TabDataQuality dataQualitySections={dataQualitySections} />}
+        {activeTab === "apilogs" && <TabAPILogs apiLogs={apiLogs} logFilter={logFilter} setLogFilter={setLogFilter} />}
+        {activeTab === "markdown" && <TabMarkdown copied={copied} markdown={activeReportMarkdown} onCopy={handleCopy} />}
 
         <div className="text-xs text-slate-400 text-center pb-2">
           Research-only dashboard. This is not financial advice, investment advice, or a recommendation to buy, sell, hold, or use leverage.

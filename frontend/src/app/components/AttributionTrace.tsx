@@ -21,18 +21,6 @@ interface TracePayload {
   alternative_explanations?: unknown[];
 }
 
-const fallbackCandidates: TraceCandidate[] = [
-  {
-    driver: "Long leverage flush",
-    layer: "derivatives",
-    raw_score: 2.5,
-    adjustments: "+ timing + cross-layer confirmation",
-    final_score: 2.84,
-    classification: "Primary",
-    reason: "Funding rate inversion and open interest contraction strongly support primary classification.",
-  },
-];
-
 function ClassBadge({ cls }: { cls: string }) {
   const normalized = cls.toLowerCase();
   const map: Record<string, string> = {
@@ -77,7 +65,8 @@ export function AttributionTrace({ reportId }: { reportId?: string | null }) {
     };
   }, [reportId]);
 
-  const candidates = payload?.attribution_trace?.length ? payload.attribution_trace : fallbackCandidates;
+  const candidates = payload?.attribution_trace || [];
+  const isTraceUnavailable = !payload || (payload?.attribution_trace || []).length === 0;
   const summary = useMemo(() => {
     const primary = candidates.filter((c) => (c.classification || c.cls || "").toLowerCase() === "primary").length;
     const secondary = candidates.filter((c) => (c.classification || c.cls || "").toLowerCase() === "secondary").length;
@@ -100,6 +89,17 @@ export function AttributionTrace({ reportId }: { reportId?: string | null }) {
       </div>
 
       {error && <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-3 text-xs">{error}</div>}
+
+      {isTraceUnavailable && !loading && !error && (
+        <div className="bg-amber-50 border border-amber-100 text-amber-800 rounded-xl p-4 text-sm">
+          <p style={{ fontWeight: 600 }}>No attribution trace available for this report.</p>
+          <p className="text-xs mt-1 text-amber-600">
+            The trace endpoint returned no candidates. This may indicate incomplete data or a report that is still processing.
+          </p>
+        </div>
+      )}
+
+      {!isTraceUnavailable && (<>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
@@ -162,6 +162,7 @@ export function AttributionTrace({ reportId }: { reportId?: string | null }) {
           </table>
         </div>
       </div>
+      </>)}
     </div>
   );
 }

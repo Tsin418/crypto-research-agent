@@ -450,6 +450,9 @@ function MarketSnapshotCards({ market }: { market: MarketData }) {
 function RiskScorePanel({ risk, report }: { risk: RiskData; report: ResearchReport }) {
   const score = risk.risk_score ?? report.metadata?.risk_score ?? 0;
   const riskLevel = risk.risk_level || report.metadata?.risk_level || 'n/a';
+  const confidence = risk.risk_confidence;
+  const coverage = risk.data_coverage;
+  const missingData = risk.missing_data || [];
   const breakdown = risk.risk_breakdown || {};
   const chartData = Object.entries(breakdown).map(([name, value]) => ({
     name: formatLabel(name).replace(' risk', ''),
@@ -474,6 +477,33 @@ function RiskScorePanel({ risk, report }: { risk: RiskData; report: ResearchRepo
       <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#eeeeeb]">
         <div className="h-full rounded-full bg-[#c4572c]" style={{ width: `${clampPercent(score)}%` }} />
       </div>
+
+      {confidence !== undefined && (
+        <div className="mt-3 text-xs text-[#747a80]">
+          Confidence: {formatNumber(confidence, { maximumFractionDigits: 2 })}
+          {confidence < 0.5 && <span className="text-amber-600 ml-1">(low — data coverage is limited)</span>}
+        </div>
+      )}
+
+      {missingData.length > 0 && (
+        <div className="mt-2 text-xs text-amber-700 bg-amber-50 rounded-md px-3 py-2">
+          Missing: {missingData.map((d) => formatLabel(d)).join(', ')}
+        </div>
+      )}
+
+      {coverage && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {Object.entries(coverage).map(([layer, level]) => (
+            <span key={layer} className={`text-xs px-1.5 py-0.5 rounded ${
+              level === 'high' ? 'bg-green-100 text-green-700' :
+              level === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+              'bg-red-100 text-red-700'
+            }`}>
+              {layer}: {level}
+            </span>
+          ))}
+        </div>
+      )}
 
       {chartData.length > 0 && (
         <div className="mt-6 h-[160px]">
@@ -571,6 +601,7 @@ function SignalMatrix({ signals }: { signals: NormalizedSignal[] }) {
               <th className="px-5 py-3 font-semibold">Signal</th>
               <th className="px-5 py-3 font-semibold">Value</th>
               <th className="px-5 py-3 font-semibold">Direction</th>
+              <th className="px-5 py-3 font-semibold">Severity</th>
               <th className="px-5 py-3 font-semibold">Impact</th>
               <th className="px-5 py-3 font-semibold">Confidence</th>
             </tr>
@@ -587,13 +618,22 @@ function SignalMatrix({ signals }: { signals: NormalizedSignal[] }) {
                       {formatLabel(signal.direction)}
                     </Badge>
                   </td>
+                  <td className="px-5 py-3">
+                    {signal.severity ? (
+                      <Badge variant="outline" className={`${badgeClasses(signal.severity)} capitalize`}>
+                        {formatLabel(signal.severity)}
+                      </Badge>
+                    ) : (
+                      <span className="text-[#969ba0]">—</span>
+                    )}
+                  </td>
                   <td className="px-5 py-3 capitalize text-[#4f555b]">{formatLabel(signal.impact_level)}</td>
                   <td className="px-5 py-3 text-[#4f555b]">{formatNumber(signal.confidence, { maximumFractionDigits: 2 })}</td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan={6} className="px-5 py-8 text-center text-[#777d83]">
+                <td colSpan={7} className="px-5 py-8 text-center text-[#777d83]">
                   No normalized signals returned.
                 </td>
               </tr>

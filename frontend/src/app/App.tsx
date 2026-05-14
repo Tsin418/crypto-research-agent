@@ -183,17 +183,24 @@ export default function App() {
 
   const recentReports = useMemo(
     () =>
-      reports.slice(0, 3).map((report) => ({
-        id: report.id,
-        label: report.metadata.asset ? `${report.metadata.asset} ${report.metadata.time_window || "report"}` : "Research report",
-        sub: `${report.metadata.risk_level || report.metadata.status} · ${formatRecentTime(report.metadata.updated_at)}`,
-        color:
-          report.metadata.status === "failed"
-            ? "bg-red-500"
-            : report.metadata.asset === "ETH"
-              ? "bg-blue-500"
-              : "bg-orange-500",
-      })),
+      reports.slice(0, 3).map((report) => {
+        const ageMs = Date.now() - new Date(report.metadata.updated_at).getTime();
+        const ageMin = Math.round(ageMs / 60000);
+        const isStale = ageMin > 30;
+        const ageLabel = ageMin < 1 ? "just now" : ageMin < 60 ? `${ageMin}m ago` : `${Math.round(ageMin / 60)}h ago`;
+        return {
+          id: report.id,
+          label: report.metadata.asset ? `${report.metadata.asset} ${report.metadata.time_window || "report"}` : "Research report",
+          sub: `${report.metadata.risk_level || report.metadata.status} · ${ageLabel}`,
+          stale: isStale,
+          color:
+            report.metadata.status === "failed"
+              ? "bg-red-500"
+              : report.metadata.asset === "ETH"
+                ? "bg-blue-500"
+                : "bg-orange-500",
+        };
+      }),
     [reports]
   );
 
@@ -365,8 +372,8 @@ export default function App() {
     ),
     reports: <Reports reports={reports.map((report) => report.metadata)} onOpenDetail={(id) => openReportDetail("reports", id)} />,
     autoscan: <AutoScan onOpenDetail={(reportId) => openReportDetail("autoscan", reportId || currentReportId || reports[0]?.id)} />,
-    onchain: <OnchainEvents />,
-    sources: <DataSources />,
+    onchain: <OnchainEvents currentReportId={currentReportId} currentAsset={asset === "AUTO" ? "BTC" : asset} />,
+    sources: <DataSources reportId={currentReportId} />,
     trace: <AttributionTrace reportId={currentReportId || reports[0]?.id} />,
     settings: (
       <Settings
@@ -388,6 +395,7 @@ export default function App() {
         riskLevel={currentReport?.metadata.risk_level ?? undefined}
         updatedAt={currentReport?.metadata.updated_at}
         errorMessage={currentReport?.error || errorMessage || undefined}
+        dashboardData={currentReport?.dashboardData}
         onBack={() => setPage(detailParentPage)}
         onOpenTrace={() => setPage("trace")}
       />
@@ -435,10 +443,22 @@ export default function App() {
           {isGenerating ? <Loader2 size={13} className="animate-spin mx-auto" /> : "Generate"}
         </button>
 
-        <div className="flex items-center gap-1.5 text-xs text-slate-500 pl-2 border-l border-slate-100 shrink-0">
-          <span className={`w-2 h-2 rounded-full ${backendOnline ? "bg-green-500" : "bg-red-500"}`} />
-          <span className="hidden md:inline" title={backendHealth.error || backendHealth.apiUrl}>
-            {backendOnline ? "Backend" : "Offline"}
+        <div className="flex items-center gap-2 text-xs text-slate-500 pl-2 border-l border-slate-100 shrink-0">
+          <span className="flex items-center gap-1" title={`Backend API: ${backendHealth.apiUrl}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${backendOnline ? "bg-green-500" : "bg-red-500"}`} />
+            <span className="hidden lg:inline text-[11px]">API</span>
+          </span>
+          <span className="flex items-center gap-1" title={currentReport ? `Report: ${currentReport.id}` : "No report loaded"}>
+            <span className={`w-1.5 h-1.5 rounded-full ${currentReport ? "bg-green-500" : "bg-slate-300"}`} />
+            <span className="hidden lg:inline text-[11px]">Report</span>
+          </span>
+          <span className="flex items-center gap-1" title={marketScans.length > 0 ? `Market scan: ${marketScans.length} assets` : "No market scan data"}>
+            <span className={`w-1.5 h-1.5 rounded-full ${marketScans.length > 0 ? "bg-green-500" : "bg-slate-300"}`} />
+            <span className="hidden lg:inline text-[11px]">Scan</span>
+          </span>
+          <span className="flex items-center gap-1" title="Source health">
+            <span className={`w-1.5 h-1.5 rounded-full ${backendOnline ? "bg-green-500" : "bg-slate-300"}`} />
+            <span className="hidden lg:inline text-[11px]">Sources</span>
           </span>
         </div>
       </header>
@@ -500,9 +520,16 @@ export default function App() {
                   onClick={() => openReportDetail("overview", report.id)}
                   className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-slate-50 transition-colors text-left"
                 >
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${report.color}`} />
-                  <div className="min-w-0">
-                    <div className="text-xs text-slate-700 truncate" style={{ fontWeight: 500 }}>{report.label}</div>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${report.stale ? "bg-slate-300" : report.color}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-700 truncate" style={{ fontWeight: 500 }}>{report.label}</span>
+                      {report.stale && (
+                        <span className="text-[10px] text-amber-600 bg-amber-50 px-1 py-0.5 rounded shrink-0" title="Report data may be stale">
+                          stale
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-slate-400 truncate">{report.sub}</div>
                   </div>
                 </button>

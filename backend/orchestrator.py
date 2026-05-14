@@ -22,12 +22,22 @@ from backend.signals import extract_normalized_signals
 from backend.storage import Storage
 
 
+def target_price_change(market_data: dict, time_window: str) -> float | None:
+    """Return the price change that matches the selected time window."""
+    if time_window == "4h":
+        return market_data.get("price_change_4h_pct")
+    if time_window == "7d":
+        return market_data.get("price_change_7d_pct")
+    return market_data.get("price_change_24h_pct")
+
+
 async def build_research_context(settings: Settings, request: ReportRequest, storage: Storage) -> ResearchContext:
     llm = DeepSeekClient(settings)
     intent = await parse_intent(request, llm)
+    time_window = intent.time_window or "24h"
     market_task = fetch_market(settings, intent.asset)
     derivatives_task = fetch_derivatives(settings, intent.asset, storage)
-    news_task = fetch_news(settings, intent.asset, intent.time_window, llm)
+    news_task = fetch_news(settings, intent.asset, time_window, llm)
     onchain_task = fetch_onchain(settings, intent.asset, storage)
     market, derivatives, news, onchain = await asyncio.gather(
         market_task,
@@ -36,13 +46,13 @@ async def build_research_context(settings: Settings, request: ReportRequest, sto
         onchain_task,
     )
     etf = await fetch_etf_flow(intent.asset, news=news.data)
-    macro = await fetch_macro_context(settings, market.data.get("price_change_24h_pct"))
+    macro = await fetch_macro_context(settings, target_price_change(market.data, time_window))
     market.data = enrich_with_history(storage, intent.asset, "market", market.data)
     derivatives.data = enrich_with_history(storage, intent.asset, "derivatives", derivatives.data)
     onchain.data = enrich_with_history(storage, intent.asset, "onchain", onchain.data)
     etf.data = enrich_with_history(storage, intent.asset, "etf_flow", etf.data)
-    risk = compute_risk(market.data, derivatives.data, news.data, onchain.data, etf.data, macro.data)
-    attribution = build_attribution(intent.asset, market.data, derivatives.data, news.data, onchain.data, etf.data, macro.data)
+    risk = compute_risk(market.data, derivatives.data, news.data, onchain.data, etf.data, macro.data, time_window)
+    attribution = build_attribution(intent.asset, market.data, derivatives.data, news.data, onchain.data, etf.data, macro.data, time_window)
     return ResearchContext(
         request=request,
         intent=intent,
@@ -85,7 +95,7 @@ async def run_report_job(settings: Settings, storage: Storage, report_id: str, r
             )
         storage.save_snapshot(report_id, "risk", "internal_rules", context.risk)
         storage.save_snapshot(report_id, "attribution", "internal_rules", context.attribution)
-        storage.save_normalized_signals(report_id, extract_normalized_signals(context))
+        storage.save_normalized_signals(report_id, extract_normalized_signals(context, time_window))
         markdown = await generate_report(context, llm)
         storage.complete_report(
             report_id,

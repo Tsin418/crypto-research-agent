@@ -357,6 +357,8 @@ export function Overview({
       fallbackPrice: btcMarketScan?.price_now,
       fallbackChange: btcMarketScan?.price_change_4h_pct,
       sub: "4h change",
+      source: btcReport ? "report snapshot" : btcMarketScan ? "market scan" : null,
+      snapshotTime: btcReport?.updated_at || btcMarketScan?.created_at || null,
     },
     {
       label: "ETH",
@@ -364,6 +366,8 @@ export function Overview({
       fallbackPrice: ethMarketScan?.price_now,
       fallbackChange: ethMarketScan?.price_change_4h_pct,
       sub: "4h change",
+      source: ethReport ? "report snapshot" : ethMarketScan ? "market scan" : null,
+      snapshotTime: ethReport?.updated_at || ethMarketScan?.created_at || null,
     },
   ].map((item) => {
     const change = item.report?.price_change_4h_pct ?? item.fallbackChange ?? null;
@@ -378,6 +382,8 @@ export function Overview({
       data: sparkFromPrice(price, change),
       color: trend === "up" ? "#10B981" : trend === "down" ? "#EF4444" : "#64748B",
       empty: price === null,
+      source: item.source,
+      snapshotTime: item.snapshotTime,
     };
   });
 
@@ -462,6 +468,11 @@ export function Overview({
                 {item.trend === "up" ? <TrendingUp size={12} /> : item.trend === "down" ? <TrendingDown size={12} /> : <Minus size={12} />}
                 <span>{item.empty ? "No backend data" : `${item.change} ${item.sub}`}</span>
               </div>
+              {'source' in item && item.source && (
+                <div className="text-[10px] text-slate-400 mt-1.5">
+                  {item.source}{item.snapshotTime ? ` · ${new Date(item.snapshotTime).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}
+                </div>
+              )}
             </div>
             <Sparkline data={item.data} color={item.color} width={90} height={36} />
           </div>

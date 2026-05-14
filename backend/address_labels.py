@@ -57,29 +57,58 @@ def apply_transfer_labels(event: dict) -> dict:
         event["to_label"] = to_label.get("label", to_address)
         event["to_entity_type"] = to_type
 
+    # Determine label coverage
+    labels_available = sum([from_label is not None, to_label is not None])
+    if labels_available == 2:
+        event["entity_label_coverage"] = "full"
+    elif labels_available == 1:
+        event["entity_label_coverage"] = "partial"
+    else:
+        event["entity_label_coverage"] = "none"
+
     if to_type == "exchange" and from_type == "exchange":
         event["direction"] = "exchange_internal_transfer"
         event["direction_confidence"] = "low"
+        event["direction_confirmed"] = False
+        event["sell_pressure_evidence"] = False
     elif to_type == "exchange" and from_type != "exchange":
         event["direction"] = "potential_sell_pressure"
         event["direction_confidence"] = "medium"
+        event["direction_confirmed"] = True
+        event["sell_pressure_evidence"] = True
     elif from_type == "exchange" and to_type != "exchange":
         event["direction"] = "accumulation_or_custody_outflow"
         event["direction_confidence"] = "medium"
+        event["direction_confirmed"] = True
+        event["sell_pressure_evidence"] = False
     elif to_type == "issuer" or from_type == "issuer" or to_type == "treasury" or from_type == "treasury":
         event["direction"] = "issuer_or_treasury_movement"
         event["direction_confidence"] = "low"
+        event["direction_confirmed"] = False
+        event["sell_pressure_evidence"] = False
     elif to_type == "custody" or from_type == "custody":
         event["direction"] = "custodian_movement"
         event["direction_confidence"] = "low"
+        event["direction_confirmed"] = False
+        event["sell_pressure_evidence"] = False
     elif to_type == "bridge" or from_type == "bridge":
         event["direction"] = "bridge_movement"
         event["direction_confidence"] = "low"
+        event["direction_confirmed"] = False
+        event["sell_pressure_evidence"] = False
     elif from_label is None and to_label is None:
         event["direction"] = "unknown_transfer"
         event["direction_confidence"] = "low"
+        event["direction_confirmed"] = False
+        event["sell_pressure_evidence"] = False
     else:
         event["direction"] = "large_transfer_with_partial_labels"
         event["direction_confidence"] = "low"
+        event["direction_confirmed"] = False
+        event["sell_pressure_evidence"] = False
+
+    # Add a human-readable note about unconfirmed transfers
+    if not event.get("direction_confirmed"):
+        event["direction_note"] = "Direction unknown. Not evidence of sell pressure without confirmed wallet labels."
 
     return event

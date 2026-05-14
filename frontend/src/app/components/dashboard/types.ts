@@ -28,6 +28,7 @@ export interface NormalizedSignal {
   signal_name: string;
   signal_value: string;
   direction: Direction;
+  severity?: string | null;
   impact_level: string;
   confidence: number;
   created_at?: string;
@@ -71,6 +72,9 @@ export interface RiskData {
   risk_level?: string;
   risk_breakdown?: Record<string, number>;
   risk_summary?: string;
+  risk_confidence?: number;
+  data_coverage?: Record<string, string>;
+  missing_data?: string[];
 }
 
 export interface AttributionDriver {

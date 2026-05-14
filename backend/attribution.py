@@ -47,11 +47,12 @@ def _price_direction(market_change: float | None) -> str:
     return "neutral"
 
 
-def _causal_timing(published_at: str | None, now_utc: datetime) -> str:
+def _causal_timing(published_at: str | None, now_utc: datetime, time_window: str = "24h") -> str:
     published = _parse_time(published_at)
     if published is None:
         return "unknown"
-    move_start = now_utc - timedelta(hours=24)
+    lookback_hours = {"4h": 4, "24h": 24, "7d": 168}.get(time_window, 24)
+    move_start = now_utc - timedelta(hours=lookback_hours)
     move_end = now_utc
     if published < move_start:
         return "before_move"
@@ -406,7 +407,14 @@ def classify_derivatives_regime(
         "missing_evidence": missing,
     }
 
-    if oi_change_24h_pct is None or (funding_now is None and funding_change is None):
+    # Require at least 2 of 3 key metrics (OI, funding, liquidations) for any regime classification
+    metrics_available = sum([
+        oi_change_24h_pct is not None,
+        funding_now is not None or funding_change is not None,
+        long_liquidations_24h is not None or short_liquidations_24h is not None,
+    ])
+    if metrics_available < 2:
+        result["missing_evidence"].append("Derivatives data coverage is too low for regime classification (< 2 of 3 key metrics available).")
         return result
 
     if price_state == "down" and oi_state == "down" and long_dominant and funding_positive:
@@ -475,25 +483,31 @@ def classify_derivatives_regime(
     return result
 
 
-def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, now_utc: datetime) -> tuple[list[dict], list[dict]]:
+def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, now_utc: datetime, time_window: str = "24h") -> tuple[list[dict], list[dict]]:
     candidates: list[dict] = []
     noise: list[dict] = []
-    market_change = market.get("price_change_24h_pct")
+    market_change = _target_change(market, time_window)
     price_direction = _price_direction(market_change)
     for event in news.get("events", [])[:12]:
         direction = event.get("direction", "neutral")
         impact = event.get("impact_level", "low")
         related = [str(item).upper() for item in event.get("asset_related", [])]
-        causal_timing = _causal_timing(event.get("published_at"), now_utc)
+        causal_timing = _causal_timing(event.get("published_at"), now_utc, time_window)
         score = TIMING_SCORE[causal_timing]
         evidence = ["news"]
         supporting: list[str] = []
         counter: list[str] = []
         missing: list[str] = []
+        primary_eligible = True
 
         if asset.upper() in related:
             score += 1.0
             supporting.append("News item directly references the queried asset.")
+        elif related:
+            counter.append(f"News item references {', '.join(related)}, not the queried asset ({asset}).")
+            primary_eligible = False
+        else:
+            missing.append("News item does not specify related assets; asset relevance is unconfirmed.")
         if impact == "high":
             score += 1.0
             supporting.append("News item is classified as high impact.")
@@ -520,7 +534,8 @@ def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, on
         if category in {"regulation", "regulatory", "etf_flow", "exchange_announcement"}:
             evidence.append("regulatory" if "regulat" in category else "official_announcement")
 
-        primary_eligible = causal_timing != "after_move"
+        if primary_eligible and causal_timing == "after_move":
+            primary_eligible = False
         cross_layer = _cross_layer_confirmation(
             direction=direction,
             source_type="news",
@@ -685,15 +700,28 @@ def _alternative_explanations(primary: list[dict[str, Any]], secondary: list[dic
     return alternatives[:4]
 
 
-def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None, macro: dict | None = None) -> dict:
+def _target_change(market: dict, time_window: str) -> float | None:
+    if time_window == "4h":
+        return market.get("price_change_4h_pct")
+    if time_window == "7d":
+        return market.get("price_change_7d_pct")
+    return market.get("price_change_24h_pct")
+
+
+def _window_label(time_window: str) -> str:
+    return {"4h": "4h", "24h": "24h", "7d": "7d"}.get(time_window, "24h")
+
+
+def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None, macro: dict | None = None, time_window: str = "24h") -> dict:
     candidates: list[dict] = []
     noise: list[dict] = []
     now_utc = datetime.now(UTC)
-    market_change = market.get("price_change_24h_pct")
+    market_change = _target_change(market, time_window)
     volume_ratio = market.get("volume_ratio_vs_7d")
     price = market.get("price_now")
+    window_label = _window_label(time_window)
     event_summary = (
-        f"{asset} moved {market_change:.2f}% over the last 24h. Current spot reference price is ${price:,.2f}."
+        f"{asset} moved {market_change:.2f}% over the last {window_label}. Current spot reference price is ${price:,.2f}."
         if market_change is not None and price
         else f"{asset} market data is limited for this window."
     )
@@ -882,7 +910,7 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
             )
         )
 
-    news_candidates, news_noise = _news_candidates(asset, market, derivatives, news, onchain, now_utc)
+    news_candidates, news_noise = _news_candidates(asset, market, derivatives, news, onchain, now_utc, time_window)
     candidates.extend(news_candidates)
     noise.extend(news_noise)
 

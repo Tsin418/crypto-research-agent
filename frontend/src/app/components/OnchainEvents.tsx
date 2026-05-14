@@ -26,6 +26,7 @@ interface OnchainEvent {
   from: string;
   to: string;
   direction: string;
+  directionConfirmed: boolean;
   source: string;
 }
 
@@ -47,24 +48,37 @@ function getSnapshotData(snapshot?: SnapshotEnvelope) {
   return data as Record<string, unknown>;
 }
 
-function DirectionBadge({ direction }: { direction: string }) {
+function DirectionBadge({ direction, confirmed }: { direction: string; confirmed?: boolean }) {
   const cls =
     direction.includes("inflow") ? "bg-red-100 text-red-700" :
     direction.includes("outflow") ? "bg-green-100 text-green-700" :
     direction.includes("large") ? "bg-orange-100 text-orange-700" :
     "bg-slate-100 text-slate-600";
   const label = direction.replaceAll("_", " ");
-  return <span className={`text-xs px-2 py-0.5 rounded whitespace-nowrap ${cls}`}>{label}</span>;
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={`text-xs px-2 py-0.5 rounded whitespace-nowrap ${cls}`}>{label}</span>
+      {confirmed === false && (
+        <span className="text-xs text-amber-600" title="Direction not confirmed. Not evidence of sell pressure.">?</span>
+      )}
+    </span>
+  );
 }
 
-export function OnchainEvents() {
-  const [filter, setFilter] = useState("ETH only");
+interface OnchainEventsProps {
+  currentReportId?: string | null;
+  currentAsset?: string;
+}
+
+export function OnchainEvents({ currentReportId, currentAsset = "BTC" }: OnchainEventsProps) {
+  const [filter, setFilter] = useState<string>("All");
   const [limit, setLimit] = useState("Limit 50");
   const [events, setEvents] = useState<OnchainEvent[]>([]);
   const [source, setSource] = useState<string>("backend");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
+  const [loadedReportId, setLoadedReportId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,102 +87,161 @@ export function OnchainEvents() {
       setLoading(true);
       setError(null);
       setFallbackNote(null);
-      try {
-        const latest = await requestJson<LatestReport>("/api/research/latest?asset=ETH", "Failed to load latest ETH report");
-        const data = await requestJson<ReportData>(`/api/research/report/${latest.report_id}/data`, "Failed to load on-chain report data");
-        const onchainSnapshot = data.snapshots.onchain;
-        const onchain = getSnapshotData(onchainSnapshot);
-        const rawTransfers = Array.isArray(onchain.large_transfers) ? onchain.large_transfers : [];
-        const mapped = rawTransfers.slice(0, limit === "Limit 50" ? 50 : 100).map((item, index) => {
-          const row = item as Record<string, unknown>;
-          return {
-            time: typeof row.timestamp === "string" ? new Date(row.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a",
-            asset: "ETH",
-            amount: row.amount === undefined || row.amount === null ? "n/a" : String(row.amount),
-            hash: typeof row.hash === "string" ? row.hash : `event-${index}`,
-            from: typeof row.from_label === "string" ? row.from_label : "unknown",
-            to: typeof row.to_label === "string" ? row.to_label : "unknown",
-            direction: typeof row.direction === "string" ? row.direction : "large_transfer",
-            source: onchainSnapshot?.source || "onchain",
-          };
-        });
 
-        if (mapped.length === 0) {
-          throw new Error("Latest ETH report has no on-chain snapshot events.");
+      const assetFilter = currentAsset && currentAsset !== "AUTO" ? currentAsset : "BTC";
+
+      try {
+        let reportId = currentReportId;
+
+        // Step 1: If we have a current report, use it directly
+        if (reportId) {
+          try {
+            const data = await requestJson<ReportData>(
+              `/api/research/report/${reportId}/data`,
+              "Failed to load report on-chain data"
+            );
+            const onchainSnapshot = data.snapshots?.onchain;
+            const onchain = getSnapshotData(onchainSnapshot);
+            const rawTransfers = Array.isArray(onchain.large_transfers) ? onchain.large_transfers : [];
+
+            if (rawTransfers.length > 0) {
+              const mapped = mapTransfers(rawTransfers, onchainSnapshot?.source || "backend", assetFilter);
+              if (!cancelled) {
+                setEvents(mapped);
+                setSource(onchainSnapshot?.source || "backend");
+                setLoadedReportId(reportId);
+                setLoading(false);
+                return;
+              }
+            }
+          } catch {
+            // Current report has no on-chain data, continue to fallback
+          }
         }
 
-        if (!cancelled) {
-          setEvents(mapped);
-          setSource(onchainSnapshot?.source || "backend");
+        // Step 2: Try latest report for the current asset
+        try {
+          const latest = await requestJson<LatestReport>(
+            `/api/research/latest?asset=${assetFilter}`,
+            `Failed to load latest ${assetFilter} report`
+          );
+          const data = await requestJson<ReportData>(
+            `/api/research/report/${latest.report_id}/data`,
+            "Failed to load on-chain report data"
+          );
+          const onchainSnapshot = data.snapshots?.onchain;
+          const onchain = getSnapshotData(onchainSnapshot);
+          const rawTransfers = Array.isArray(onchain.large_transfers) ? onchain.large_transfers : [];
+
+          if (rawTransfers.length > 0) {
+            const mapped = mapTransfers(rawTransfers, onchainSnapshot?.source || "backend", assetFilter);
+            if (!cancelled) {
+              setEvents(mapped);
+              setSource(onchainSnapshot?.source || "backend");
+              setLoadedReportId(latest.report_id);
+              setFallbackNote(`Loaded from latest ${assetFilter} report snapshot (report ${latest.report_id.slice(0, 8)}).`);
+              setLoading(false);
+              return;
+            }
+          }
+        } catch (reportErr) {
+          // Latest report failed, try worker
+          const reportError = reportErr instanceof Error ? reportErr.message : String(reportErr);
+
+          try {
+            const workerBaseUrl = getWorkerApiBaseUrl();
+            if (!workerBaseUrl) throw new Error("Worker API URL is not configured.");
+
+            const maxRows = limit === "Limit 50" ? 50 : 100;
+            const worker = await requestJson<{ events: WorkerEventRow[] }>(
+              `${workerBaseUrl}/api/onchain/events?limit=${maxRows}`,
+              "Failed to load Worker on-chain events"
+            );
+            const mapped = (worker.events || []).map((row, index) => ({
+              time: row.timestamp ? new Date(row.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a",
+              asset: row.asset || assetFilter,
+              amount: row.amount === undefined || row.amount === null ? "n/a" : String(row.amount),
+              hash: row.tx_hash || `worker-event-${index}`,
+              from: row.from_label || "unknown",
+              to: row.to_label || "unknown",
+              direction: row.direction || "large_transfer",
+              directionConfirmed: false,
+              source: row.source || "worker",
+            }));
+
+            if (!cancelled) {
+              setEvents(mapped);
+              setSource("worker");
+              setFallbackNote(`Report snapshot unavailable; loaded Worker / D1 events instead. ${reportError}`);
+              setLoading(false);
+              return;
+            }
+          } catch (fallbackErr) {
+            if (!cancelled) {
+              setEvents([]);
+              setError(`${reportError} Worker fallback also failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+            }
+          }
         }
       } catch (err) {
-        const reportError = err instanceof Error ? err.message : String(err);
-        try {
-          const workerBaseUrl = getWorkerApiBaseUrl();
-          if (!workerBaseUrl) {
-            throw new Error("Worker API URL is not configured.");
-          }
-          const maxRows = limit === "Limit 50" ? 50 : 100;
-          const worker = await requestJson<{ events: WorkerEventRow[] }>(
-            `${workerBaseUrl}/api/onchain/events?limit=${maxRows}`,
-            "Failed to load Worker on-chain events"
-          );
-          const mapped = (worker.events || []).map((row, index) => ({
-            time: row.timestamp ? new Date(row.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a",
-            asset: row.asset || "ETH",
-            amount: row.amount === undefined || row.amount === null ? "n/a" : String(row.amount),
-            hash: row.tx_hash || `worker-event-${index}`,
-            from: row.from_label || "unknown",
-            to: row.to_label || "unknown",
-            direction: row.direction || "large_transfer",
-            source: row.source || "worker",
-          }));
-          if (!cancelled) {
-            setEvents(mapped);
-            setSource("worker");
-            setFallbackNote(`Report snapshot unavailable; loaded Worker / D1 events instead. ${reportError}`);
-          }
-        } catch (fallbackErr) {
-          if (!cancelled) {
-            setEvents([]);
-            setError(`${reportError} Worker fallback also failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
-          }
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [limit]);
+    return () => { cancelled = true; };
+  }, [currentReportId, currentAsset, limit]);
+
+  function mapTransfers(rawTransfers: Array<unknown>, snapshotSource: string, defaultAsset: string): OnchainEvent[] {
+    return rawTransfers.slice(0, limit === "Limit 50" ? 50 : 100).map((item, index) => {
+      const row = item as Record<string, unknown>;
+      const fromLabel = typeof row.from_label === "string" ? row.from_label : "unknown";
+      const toLabel = typeof row.to_label === "string" ? row.to_label : "unknown";
+      const direction = typeof row.direction === "string" ? row.direction : "large_transfer";
+      const directionConfirmed = row.direction_confirmed === true;
+      const isUnlabeled = fromLabel === "unknown" && toLabel === "unknown";
+
+      return {
+        time: typeof row.timestamp === "string" ? new Date(row.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "n/a",
+        asset: (row.asset as string) || defaultAsset,
+        amount: row.amount === undefined || row.amount === null ? "n/a" : String(row.amount),
+        hash: typeof row.hash === "string" ? row.hash : `event-${index}`,
+        from: fromLabel,
+        to: toLabel,
+        direction: isUnlabeled ? `${direction} (unconfirmed)` : direction,
+        directionConfirmed: directionConfirmed || !isUnlabeled,
+        source: snapshotSource || "onchain",
+      };
+    });
+  }
 
   const stats = useMemo(() => {
     const inflows = events.filter((event) => event.direction.includes("inflow")).length;
     const outflows = events.filter((event) => event.direction.includes("outflow")).length;
     const labeled = events.filter((event) => event.from !== "unknown" || event.to !== "unknown").length;
     const coverage = events.length ? Math.round((labeled / events.length) * 100) : 0;
+    const unconfirmed = events.filter((event) => !event.directionConfirmed).length;
 
     return [
-      { label: "ETH Transfers", value: String(events.length), sub: source, data: emptyTrend, color: "#3B82F6" },
-      { label: "Large Transfers", value: String(events.length), sub: source === "worker" ? "Worker / D1" : "latest report", data: emptyTrend, color: "#F59E0B" },
+      { label: `${currentAsset} Transfers`, value: String(events.length), sub: source, data: emptyTrend, color: "#3B82F6" },
+      { label: "Large Transfers", value: String(events.length), sub: source === "worker" ? "Worker / D1" : `report ${loadedReportId?.slice(0, 8) || "snapshot"}`, data: emptyTrend, color: "#F59E0B" },
       { label: "Exchange Inflows", value: String(inflows), sub: `${outflows} outflows`, data: emptyTrend, color: "#EF4444" },
-      { label: "Label Coverage", value: events.length ? `${coverage}%` : "n/a", sub: "wallet labels", data: emptyTrend, color: "#10B981" },
+      { label: "Label Coverage", value: events.length ? `${coverage}%` : "n/a", sub: unconfirmed > 0 ? `${unconfirmed} unconfirmed` : "wallet labels", data: emptyTrend, color: "#10B981" },
     ];
-  }, [events, source]);
+  }, [events, source, currentAsset, loadedReportId]);
 
-  const visibleEvents = filter === "ETH only" ? events.filter((event) => event.asset === "ETH") : events;
+  const visibleEvents = filter === "All" ? events : events.filter((event) => event.asset.toUpperCase() === filter.toUpperCase());
 
   return (
     <div className="p-6 space-y-5">
       <div>
         <h1 className="text-2xl" style={{ fontWeight: 600 }}>On-chain Events</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Inspect on-chain evidence from the latest backend report snapshot.
+          Inspect on-chain evidence from the current report snapshot{currentAsset ? ` (asset: ${currentAsset})` : ""}.
         </p>
       </div>
 
@@ -190,17 +263,26 @@ export function OnchainEvents() {
         ))}
       </div>
 
+      {!loading && events.length === 0 && !error && (
+        <div className="bg-amber-50 border border-amber-100 text-amber-800 rounded-xl p-4 text-sm">
+          <p style={{ fontWeight: 600 }}>No on-chain events found.</p>
+          <p className="text-xs mt-1 text-amber-600">
+            The current report has no on-chain snapshot data. Generate a new report or check if Worker/D1 fallback is configured.
+          </p>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-100 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h3 className="text-base" style={{ fontWeight: 600 }}>Recent On-chain Events</h3>
           <div className="flex gap-2">
             <button
-              onClick={() => setFilter(filter === "ETH only" ? "All" : "ETH only")}
+              onClick={() => setFilter(filter === "All" ? currentAsset || "BTC" : "All")}
               className={`text-xs px-3 py-1 rounded-lg border transition-colors ${
-                filter === "ETH only" ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 text-slate-600"
+                filter !== "All" ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 text-slate-600"
               }`}
             >
-              {filter}
+              {filter === "All" ? "Filter by asset" : filter}
             </button>
             <button
               onClick={() => setLimit(limit === "Limit 50" ? "Limit 100" : "Limit 50")}
@@ -211,7 +293,7 @@ export function OnchainEvents() {
           </div>
         </div>
         <div className="overflow-x-auto w-full">
-          <table className="w-full text-xs min-w-[600px]">
+          <table className="w-full text-xs min-w-[640px]">
             <thead>
               <tr className="text-slate-400 border-b border-slate-100">
                 {["Time", "Asset", "Amount", "Tx Hash", "From", "To", "Direction", "Source"].map((h) => (
@@ -232,7 +314,7 @@ export function OnchainEvents() {
                   </td>
                   <td className="py-3 pr-4 text-slate-500 max-w-[120px] truncate" title={e.from}>{e.from}</td>
                   <td className="py-3 pr-4 text-slate-500 max-w-[120px] truncate" title={e.to}>{e.to}</td>
-                  <td className="py-3 pr-4"><DirectionBadge direction={e.direction} /></td>
+                  <td className="py-3 pr-4"><DirectionBadge direction={e.direction} confirmed={e.directionConfirmed} /></td>
                   <td className="py-3 text-slate-400">{e.source}</td>
                 </tr>
               ))}

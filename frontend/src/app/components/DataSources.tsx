@@ -68,11 +68,12 @@ function logsToSourceHealth(logs: ApiLog[]): SourceHealth[] {
   });
 }
 
-export function DataSources() {
+export function DataSources({ reportId }: { reportId?: string | null }) {
   const [sources, setSources] = useState<SourceHealth[]>([]);
   const [apiLogs, setApiLogs] = useState<ApiLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -89,11 +90,29 @@ export function DataSources() {
           console.warn(healthError);
         }
 
-        const reports = await requestJson<{ reports: ReportRecord[] }>("/api/research/reports?limit=1", "Failed to load latest report");
         let logs: ApiLog[] = [];
-        if (reports.reports[0]?.report_id) {
-          const data = await requestJson<ReportData>(`/api/research/report/${reports.reports[0].report_id}/data`, "Failed to load API logs");
-          logs = data.api_call_logs || [];
+        const targetReportId = reportId;
+        if (targetReportId) {
+          try {
+            const data = await requestJson<ReportData>(`/api/research/report/${targetReportId}/data`, "Failed to load API logs for current report");
+            logs = data.api_call_logs || [];
+            if (logs.length) setDataSource(`current report (${targetReportId.slice(0, 8)}...)`);
+          } catch (reportErr) {
+            console.warn(reportErr);
+          }
+        }
+
+        if (!logs.length) {
+          try {
+            const reports = await requestJson<{ reports: ReportRecord[] }>("/api/research/reports?limit=1", "Failed to load latest report");
+            if (reports.reports[0]?.report_id) {
+              const data = await requestJson<ReportData>(`/api/research/report/${reports.reports[0].report_id}/data`, "Failed to load API logs");
+              logs = data.api_call_logs || [];
+              if (logs.length) setDataSource(`latest report (${reports.reports[0].report_id.slice(0, 8)}...)`);
+            }
+          } catch (fallbackErr) {
+            console.warn(fallbackErr);
+          }
         }
 
         if (!cancelled) {
@@ -115,7 +134,7 @@ export function DataSources() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reportId]);
 
   const stats = useMemo(() => {
     const healthy = sources.filter((s) => s.health_status === "healthy").length;
@@ -140,6 +159,9 @@ export function DataSources() {
         <p className="text-sm text-slate-500 mt-0.5">
           Monitor provider health, latency, last success time, and API call quality behind every research report.
         </p>
+        {dataSource && (
+          <p className="text-xs text-slate-400 mt-1">Showing logs from: {dataSource}</p>
+        )}
       </div>
 
       {error && <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl p-3 text-xs">{error}</div>}
