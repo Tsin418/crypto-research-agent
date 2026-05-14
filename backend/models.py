@@ -64,6 +64,7 @@ class ResearchContext(BaseModel):
     derivatives: LayerResult
     news: LayerResult
     onchain: LayerResult
+    etf: LayerResult | None = None
     risk: dict[str, Any]
     attribution: dict[str, Any]
 

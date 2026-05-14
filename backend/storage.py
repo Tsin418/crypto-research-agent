@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +118,20 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_market_scans_asset_created
                     ON market_scans(asset, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS metric_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    asset TEXT NOT NULL,
+                    layer TEXT NOT NULL,
+                    metric_name TEXT NOT NULL,
+                    metric_value REAL,
+                    source TEXT,
+                    report_id TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_metric_snapshots_lookup
+                    ON metric_snapshots(asset, metric_name, created_at DESC);
                 """
             )
             existing_columns = {
@@ -302,6 +317,45 @@ class Storage:
                 """,
                 (snapshot_id, report_id, layer, source, json.dumps(raw_json), iso_now()),
             )
+
+    def save_metric_snapshot(
+        self,
+        *,
+        asset: str,
+        layer: str,
+        metric_name: str,
+        metric_value: float | None,
+        source: str | None = None,
+        report_id: str | None = None,
+    ) -> None:
+        if metric_value is None:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO metric_snapshots
+                (created_at, asset, layer, metric_name, metric_value, source, report_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (iso_now(), asset, layer, metric_name, metric_value, source, report_id),
+            )
+
+    def get_metric_history(self, asset: str, metric_name: str, lookback_days: int = 90, limit: int = 500) -> list[float]:
+        limit = max(1, min(limit, 1000))
+        cutoff = (datetime.now(UTC) - timedelta(days=lookback_days)).isoformat().replace("+00:00", "Z")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT metric_value FROM metric_snapshots
+                WHERE asset=? AND metric_name=?
+                  AND created_at >= ?
+                  AND metric_value IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (asset, metric_name, cutoff, limit),
+            ).fetchall()
+        return [float(row["metric_value"]) for row in rows if row["metric_value"] is not None]
 
     def get_report(self, report_id: str) -> StoredReport | None:
         with self._connect() as conn:

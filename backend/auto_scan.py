@@ -8,6 +8,8 @@ from typing import Any
 from backend.attribution import build_attribution
 from backend.config import Settings
 from backend.data_derivatives import fetch_derivatives
+from backend.data_etf import fetch_etf_flow
+from backend.data_history import enrich_with_history, save_layer_metric_snapshots
 from backend.data_market import fetch_4h_market_snapshot, fetch_market
 from backend.data_news import fetch_news
 from backend.data_onchain import fetch_onchain
@@ -74,10 +76,15 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         news_task,
         onchain_task,
     )
+    etf = await fetch_etf_flow(asset, news=news.data)
     merged_market = {
         **market.data,
         **{key: value for key, value in market_4h.data.items() if value is not None},
     }
+    merged_market = enrich_with_history(storage, asset, "market", merged_market)
+    derivatives.data = enrich_with_history(storage, asset, "derivatives", derivatives.data)
+    onchain.data = enrich_with_history(storage, asset, "onchain", onchain.data)
+    etf.data = enrich_with_history(storage, asset, "etf_flow", etf.data)
     market_layer = LayerResult(
         layer="market",
         source=f"{market_4h.source}/{market.source}",
@@ -85,7 +92,7 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         errors=[*market_4h.errors, *market.errors],
     )
     risk = compute_risk(market_layer.data, derivatives.data, news.data, onchain.data)
-    attribution = build_attribution(asset, market_layer.data, derivatives.data, news.data, onchain.data)
+    attribution = build_attribution(asset, market_layer.data, derivatives.data, news.data, onchain.data, etf.data)
     request = ReportRequest(query=f"{asset} 过去4小时中文市场研究", asset=asset, time_window=time_window)
     return ResearchContext(
         request=request,
@@ -94,6 +101,7 @@ async def _build_auto_context(settings: Settings, storage: Storage, asset: str, 
         derivatives=derivatives,
         news=news,
         onchain=onchain,
+        etf=etf,
         risk=risk,
         attribution=attribution,
     )
@@ -107,12 +115,25 @@ async def _generate_asset_report(settings: Settings, storage: Storage, asset: st
     try:
         llm = DeepSeekClient(settings)
         context = await _build_auto_context(settings, storage, asset, time_window)
-        for layer in (context.market, context.derivatives, context.news, context.onchain):
+        for layer in (context.market, context.derivatives, context.news, context.onchain, context.etf):
+            if layer is None:
+                continue
             storage.save_snapshot(
                 report_id,
                 layer.layer,
                 layer.source,
                 {"data": layer.data, "errors": layer.errors},
+            )
+        for layer in (context.market, context.derivatives, context.onchain, context.etf):
+            if layer is None:
+                continue
+            save_layer_metric_snapshots(
+                storage,
+                context.intent.asset,
+                layer.layer,
+                layer.data,
+                source=layer.source,
+                report_id=report_id,
             )
         storage.save_snapshot(report_id, "risk", "internal_rules", context.risk)
         storage.save_snapshot(report_id, "attribution", "internal_rules", context.attribution)

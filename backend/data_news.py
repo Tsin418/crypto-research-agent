@@ -63,8 +63,48 @@ KEYWORDS = {
     "exchange_event": ("withdrawal suspended", "listing", "delisting", "exchange"),
 }
 
+SOURCE_WEIGHT = {
+    "official_regulatory": 1.3,
+    "exchange_announcement": 1.2,
+    "The Block": 1.1,
+    "CoinDesk": 1.1,
+    "Wu Blockchain": 1.0,
+    "PANews": 0.9,
+    "Decrypt": 0.8,
+    "CoinTelegraph": 0.8,
+    "Bitcoin Magazine": 0.8,
+    "unknown": 0.7,
+}
+
+CATEGORY_PRIOR = {
+    "macro_data": 1.2,
+    "regulation_policy": 1.2,
+    "security_event": 1.2,
+    "etf_flow": 1.1,
+    "exchange_event": 1.0,
+    "project_event": 0.7,
+    "market_commentary": 0.4,
+}
+
 BEARISH = ("outflow", "hack", "exploit", "lawsuit", "ban", "sell-off", "liquidation", "drop", "falls")
 BULLISH = ("inflow", "approval", "rally", "surge", "upgrade", "accumulation", "record high", "gains")
+
+
+def news_weight_trace(source: str | None, category: str | None) -> dict:
+    source_name = source or "unknown"
+    category_name = category or "market_commentary"
+    source_weight = SOURCE_WEIGHT.get(source_name, SOURCE_WEIGHT["unknown"])
+    category_prior = CATEGORY_PRIOR.get(category_name, 0.7)
+    return {
+        "source_weight": source_weight,
+        "category_prior": category_prior,
+        "news_weight_trace": {
+            "source": source_name,
+            "source_weight": source_weight,
+            "category": category_name,
+            "category_prior": category_prior,
+        },
+    }
 
 
 def classify_news(title: str, summary: str, asset: str) -> dict:
@@ -88,13 +128,15 @@ def classify_news(title: str, summary: str, asset: str) -> dict:
     other = "ETH" if asset == "BTC" else "BTC"
     if contains_any(text, ASSET_META[other]["name_terms"]):
         related.append(other)
-    return {
+    result = {
         "category": category,
         "asset_related": related,
         "direction": direction,
         "impact_level": impact_level,
         "confidence": 0.72 if category != "market_commentary" else 0.55,
     }
+    result.update(news_weight_trace(None, category))
+    return result
 
 
 def strip_html(value: str) -> str:
@@ -258,7 +300,7 @@ async def classify_news_with_llm(llm, event: dict, fallback: dict) -> dict:
     related = parsed.get("related_assets") or parsed.get("asset_related") or fallback["asset_related"]
     if not isinstance(related, list):
         related = fallback["asset_related"]
-    return {
+    result = {
         "category": category,
         "asset_related": [asset for asset in related if asset in {"BTC", "ETH"}] or fallback["asset_related"],
         "direction": direction,
@@ -267,6 +309,8 @@ async def classify_news_with_llm(llm, event: dict, fallback: dict) -> dict:
         "reason": parsed.get("reason", "LLM classification applied."),
         "confidence": float(parsed.get("confidence") or max(float(fallback.get("confidence", 0.55)), 0.76)),
     }
+    result.update(news_weight_trace(event.get("source"), category))
+    return result
 
 
 def _signal(events: list[dict]) -> str:
@@ -310,6 +354,7 @@ async def fetch_news(settings: Settings, asset: str, time_window: str, llm=None)
                     if published_dt < cutoff:
                         continue
                 classification = classify_news(title, summary, asset)
+                classification.update(news_weight_trace(source, classification.get("category")))
                 source_events.append(
                     {
                         "title": title,
@@ -351,7 +396,14 @@ async def fetch_news(settings: Settings, asset: str, time_window: str, llm=None)
             return await classify_news_with_llm(llm, event, fallback)
 
     classifications = await asyncio.gather(*[_classify_one(event) for event in deduped])
-    deduped = [{**event, **classification} for event, classification in zip(deduped, classifications)]
+    deduped = [
+        {
+            **event,
+            **classification,
+            **news_weight_trace(event.get("source"), classification.get("category") or event.get("category")),
+        }
+        for event, classification in zip(deduped, classifications)
+    ]
     top_news = await select_top_news_event(llm, deduped, asset)
     return LayerResult(
         layer="news",

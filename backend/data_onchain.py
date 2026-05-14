@@ -77,6 +77,45 @@ def _onchain_signal(asset: str, transfers: list[dict], stablecoin_supply_change:
     return "btc_onchain_data_limited"
 
 
+def _evidence_quality(transfers: list[dict], stablecoin_supply_change: float | None) -> dict[str, Any]:
+    exchange_inflows = [tx for tx in transfers if tx.get("direction") == "potential_sell_pressure"]
+    large_transfers = [tx for tx in transfers if str(tx.get("direction", "")).startswith("large_")]
+    if len(exchange_inflows) >= 2:
+        return {
+            "onchain_evidence_quality": "strong",
+            "onchain_primary_eligible": True,
+            "exchange_inflow_count": len(exchange_inflows),
+            "large_transfer_count": len(large_transfers),
+        }
+    if len(exchange_inflows) == 1:
+        return {
+            "onchain_evidence_quality": "medium",
+            "onchain_primary_eligible": False,
+            "exchange_inflow_count": len(exchange_inflows),
+            "large_transfer_count": len(large_transfers),
+        }
+    if large_transfers:
+        return {
+            "onchain_evidence_quality": "weak",
+            "onchain_primary_eligible": False,
+            "exchange_inflow_count": 0,
+            "large_transfer_count": len(large_transfers),
+        }
+    if stablecoin_supply_change is not None and stablecoin_supply_change < 0:
+        return {
+            "onchain_evidence_quality": "medium",
+            "onchain_primary_eligible": False,
+            "exchange_inflow_count": 0,
+            "large_transfer_count": 0,
+        }
+    return {
+        "onchain_evidence_quality": "unknown",
+        "onchain_primary_eligible": False,
+        "exchange_inflow_count": 0,
+        "large_transfer_count": 0,
+    }
+
+
 async def _etherscan_gas(client: httpx.AsyncClient, settings: Settings) -> tuple[dict | None, list[str]]:
     if not settings.etherscan_api_key:
         return None, ["etherscan: API key not configured"]
@@ -235,6 +274,7 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
             errors.extend(btc_errors)
             transfers.extend(btc_transfers)
 
+    quality = _evidence_quality(transfers, stablecoins.get("stablecoin_supply_change_24h"))
     data = {
         "asset": asset,
         "exchange_netflow_24h": None,
@@ -257,6 +297,7 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
         "eth_staking_queue": staking.get("eth_staking_queue"),
         "restaking_related_event": None,
         "onchain_signal": _onchain_signal(asset, transfers, stablecoins.get("stablecoin_supply_change_24h")),
+        **quality,
         "note": "ETH/EVM large transfers use Alchemy webhook events plus optional Etherscan watch addresses. BTC large transfers use mempool.space latest block scans.",
     }
     return LayerResult(layer="onchain", source="etherscan/alchemy_webhooks/mempool.space", data=data, errors=errors)

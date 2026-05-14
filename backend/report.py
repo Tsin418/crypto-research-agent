@@ -67,6 +67,20 @@ def _risk_lines(risk: dict) -> list[str]:
     ]
 
 
+def _evidence_quality_lines(context: ResearchContext) -> list[str]:
+    lines = [
+        "- Strong: labeled exchange inflow, direct market data, or official source.",
+        "- Medium: public API with partial context.",
+        "- Weak: unlabeled large transfer or price commentary.",
+    ]
+    if context.onchain.data.get("onchain_evidence_quality"):
+        lines.append(f"- On-chain evidence quality: {context.onchain.data.get('onchain_evidence_quality')}.")
+    etf = context.etf.data if context.etf else {}
+    if etf and (etf.get("flow_direction") == "unavailable" or etf.get("is_stale")):
+        lines.append("- Data limitation: ETF flow data is unavailable or stale; this report does not treat ETF flows as confirmed evidence.")
+    return lines
+
+
 def _factor_lines(context: ResearchContext) -> tuple[list[str], list[str]]:
     bullish: list[str] = []
     bearish: list[str] = []
@@ -146,11 +160,16 @@ def local_report(context: ResearchContext) -> str:
         lines.extend(["", "## Watchlist", "- Whether price reclaims or loses EMA20/EMA50.", "- Whether funding and open interest normalize.", "- Whether high-impact news continues in the same direction.", "- Whether large on-chain transfers or exchange inflows increase."])
 
     lines.extend(["", "## Data Limits"])
-    for layer in (context.market, context.derivatives, context.news, context.onchain):
+    layers = [context.market, context.derivatives, context.news, context.onchain]
+    if context.etf is not None:
+        layers.append(context.etf)
+    for layer in layers:
         if layer.errors:
             lines.append(f"- {layer.layer}: {'; '.join(layer.errors[:2])}")
-    if not any(layer.errors for layer in (context.market, context.derivatives, context.news, context.onchain)):
+    if not any(layer.errors for layer in layers):
         lines.append("- No source-level errors were recorded for this report.")
+
+    lines.extend(["", "## Evidence Quality", *_evidence_quality_lines(context)])
 
     lines.extend(["", "## Disclaimer", DISCLAIMER])
     return "\n".join(lines)

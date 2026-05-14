@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from backend.config import Settings
+from backend.data_spot_flow import fetch_spot_flow
 from backend.http_client import get_json, is_http_forbidden_error
 from backend.models import LayerResult
 from backend.utils import ASSET_META, ema, percent_change, round_float, safe_float
@@ -462,8 +463,9 @@ async def fetch_market(settings: Settings, asset: str) -> LayerResult:
         spot_ticker, spot_errors = await _replacement_spot_ticker(client, asset)
         if spot_errors and not spot_ticker.get("spot_turnover_24h"):
             errors.extend(spot_errors)
+        spot_flow = await fetch_spot_flow(client, asset)
 
-    merged = {"asset": asset, **primary, **technicals, **spot_ticker}
+    merged = {"asset": asset, **primary, **technicals, **spot_ticker, **spot_flow.data}
     turnover_24h = merged.get("spot_turnover_24h") or merged.get("volume_24h")
     merged["volume_ratio_vs_7d"] = round_float(
         (turnover_24h / merged["volume_7d_avg"])

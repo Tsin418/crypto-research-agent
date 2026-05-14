@@ -67,6 +67,8 @@ def _source_quality(source_type: str, evidence: list[str]) -> float:
         return 0.7
     if source_type in {"market", "derivatives"}:
         return 0.8
+    if source_type == "etf_flow":
+        return 0.8 if "news_fallback" not in evidence else 0.5
     if source_type == "onchain":
         return 0.6 if "address_labels" in evidence else 0.4
     return 0.6
@@ -110,6 +112,8 @@ def _data_completeness(candidate: dict[str, Any]) -> float:
     elif source_type == "market":
         required = ("driver", "direction", "source_quality", "score")
     elif source_type == "onchain":
+        required = ("driver", "direction", "source_quality", "score")
+    elif source_type == "etf_flow":
         required = ("driver", "direction", "source_quality", "score")
     else:
         required = ("driver", "score")
@@ -211,6 +215,26 @@ def _build_candidate(
     if extra:
         candidate.update(extra)
     return _finalize_candidate(candidate)
+
+
+def _history_metric(layer_data: dict[str, Any], metric_name: str) -> dict[str, Any]:
+    context = layer_data.get("historical_context") or {}
+    metric = context.get(metric_name)
+    return metric if isinstance(metric, dict) else {}
+
+
+def _history_bonus(layer_data: dict[str, Any], metric_name: str) -> tuple[float, str | None]:
+    metric = _history_metric(layer_data, metric_name)
+    sample_size = metric.get("sample_size") or 0
+    if sample_size < 20:
+        return 0.0, metric.get("note")
+    percentile = metric.get("percentile_90d")
+    z_value = metric.get("zscore_30d")
+    if percentile is not None and (percentile >= 0.9 or percentile <= 0.1):
+        return 0.7, f"{metric_name} is historically unusual versus local samples."
+    if z_value is not None and abs(z_value) >= 2:
+        return 0.7, f"{metric_name} has an elevated local z-score."
+    return 0.0, None
 
 
 def classify_derivatives_regime(
@@ -398,6 +422,10 @@ def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, on
             score += 0.5
             evidence.append("etf_flow")
         category = str(event.get("category", "news_event"))
+        source_weight = float(event.get("source_weight") or 0.7)
+        category_prior = float(event.get("category_prior") or 0.7)
+        score += max(-0.4, min(0.4, source_weight - 1.0))
+        score += max(-0.5, min(0.5, category_prior - 1.0))
         if category in {"regulation", "regulatory", "etf_flow", "exchange_announcement"}:
             evidence.append("regulatory" if "regulat" in category else "official_announcement")
 
@@ -410,6 +438,8 @@ def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, on
             onchain=onchain,
         )
         if causal_timing == "during_move" and cross_layer < 0.3:
+            primary_eligible = False
+        if category == "market_commentary" and cross_layer < 0.4:
             primary_eligible = False
 
         if score >= 1.0 and direction != "neutral":
@@ -431,7 +461,12 @@ def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, on
                 market=market,
                 derivatives=derivatives,
                 onchain=onchain,
-                extra={"causal_timing": causal_timing},
+                extra={
+                    "causal_timing": causal_timing,
+                    "source_weight": source_weight,
+                    "category_prior": category_prior,
+                    "news_weight_trace": event.get("news_weight_trace") or {},
+                },
             )
             candidates.append(candidate)
         elif impact == "low" or direction == "neutral":
@@ -445,7 +480,7 @@ def _news_candidates(asset: str, market: dict, derivatives: dict, news: dict, on
     return candidates, noise
 
 
-def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict) -> dict:
+def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, onchain: dict, etf: dict | None = None) -> dict:
     candidates: list[dict] = []
     noise: list[dict] = []
     now_utc = datetime.now(UTC)
@@ -458,11 +493,21 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
         else f"{asset} market data is limited for this window."
     )
 
+    etf = etf or {}
+
     if market_change is not None and abs(market_change) >= PRICE_MOVE_THRESHOLD:
         supporting = ["24h price move exceeded 2%."]
         counter: list[str] = []
         missing: list[str] = []
         score = 1.0
+        has_spot_flow_field = "spot_flow_bias" in market
+        spot_flow_bias = market.get("spot_flow_bias")
+        driver_name = "Elevated spot activity, direction unconfirmed" if has_spot_flow_field else "Elevated spot activity"
+        explanation = (
+            "The price move is accompanied by available spot activity evidence, but approximate public-trade flow does not confirm direction."
+            if has_spot_flow_field
+            else "The price move is accompanied by available spot activity evidence, suggesting spot participation should be considered."
+        )
         if volume_ratio is not None and volume_ratio >= 1.5:
             supporting.append("24h spot turnover/volume was above recent average.")
             score += 1.2
@@ -470,14 +515,34 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
             counter.append("Volume expansion was limited, weakening a spot-led explanation.")
         else:
             missing.append("Spot volume ratio unavailable.")
-        if market.get("spot_flow_bias") is None:
+        history_extra, history_note = _history_bonus(market, "volume_ratio_vs_7d")
+        if history_extra:
+            score += history_extra
+            supporting.append(history_note or "Volume was historically unusual.")
+        elif history_note:
+            missing.append(history_note)
+        if spot_flow_bias == "sell_pressure" and market_change < 0:
+            driver_name = "Spot-led selling pressure"
+            explanation = "The price decline occurred with elevated spot activity and approximate public-trade CVD points to sell pressure."
+            supporting.append("Approximate public-trade CVD points to sell pressure.")
+            score += 0.3
+        elif spot_flow_bias == "buy_pressure" and market_change > 0:
+            driver_name = "Spot-led buying pressure"
+            explanation = "The price rise occurred with elevated spot activity and approximate public-trade CVD points to buy pressure."
+            supporting.append("Approximate public-trade CVD points to buy pressure.")
+            score += 0.3
+        elif spot_flow_bias in {None, "unavailable"}:
             missing.append("Spot buy/sell flow unavailable.")
+        elif spot_flow_bias == "neutral":
+            counter.append("Approximate public-trade CVD is neutral, so spot direction is unconfirmed.")
+        else:
+            counter.append("Approximate public-trade CVD does not align with the price move.")
         if score >= 1.0:
             candidates.append(
                 _build_candidate(
-                    name="Elevated spot activity",
-                    evidence=["market_volume", "price_change"],
-                    explanation="The price move is accompanied by available spot activity evidence, suggesting spot participation should be considered.",
+                    name=driver_name,
+                    evidence=["market_volume", "price_change", "approx_spot_cvd"],
+                    explanation=explanation,
                     score=score,
                     source_type="market",
                     direction=_price_direction(market_change),
@@ -499,6 +564,15 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
         derivatives.get("short_liquidations_24h"),
     )
     if regime["score_base"] >= 1.0:
+        regime_score = regime["score_base"]
+        oi_history_bonus, oi_history_note = _history_bonus(derivatives, "open_interest_change_24h_pct")
+        regime_supporting = list(regime["supporting_evidence"])
+        regime_missing = list(regime["missing_evidence"])
+        if oi_history_bonus:
+            regime_score += oi_history_bonus
+            regime_supporting.append(oi_history_note or "Open interest change was historically unusual.")
+        elif oi_history_note:
+            regime_missing.append(oi_history_note)
         candidates.append(
             _build_candidate(
                 name=regime["label"],
@@ -509,12 +583,12 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
                     if regime["regime"] != "derivatives_data_limited"
                     else "Derivatives inputs are incomplete, so this layer is disclosed as limited evidence rather than a firm driver."
                 ),
-                score=regime["score_base"],
+                score=regime_score,
                 source_type="derivatives",
                 direction=regime["direction"],
-                supporting_evidence=regime["supporting_evidence"],
+                supporting_evidence=regime_supporting,
                 counter_evidence=regime["counter_evidence"],
-                missing_evidence=regime["missing_evidence"],
+                missing_evidence=regime_missing,
                 primary_eligible=regime["primary_eligible"],
                 market=market,
                 derivatives=derivatives,
@@ -522,6 +596,63 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
                 extra={"derivatives_regime": regime["regime"]},
             )
         )
+
+    etf_direction = etf.get("flow_direction")
+    etf_intensity = etf.get("flow_intensity")
+    if asset == "BTC" and etf_direction in {"outflow", "inflow"}:
+        etf_source = etf.get("source") or "unavailable"
+        primary_eligible = etf_source != "news_fallback"
+        supporting = ["BTC spot ETF flow data is available."]
+        missing = []
+        counter = []
+        score = 1.3
+        driver_name = "Spot ETF flow context"
+        direction = "neutral"
+        if etf.get("is_stale"):
+            missing.append("ETF flow data is stale and may not reflect the current trading day.")
+            primary_eligible = False
+        if etf_source == "news_fallback":
+            missing.append("ETF flow is inferred from news fallback rather than direct flow data.")
+        if etf_intensity == "high":
+            score += 0.8
+            supporting.append("ETF flow intensity is high.")
+        elif etf_intensity == "medium":
+            score += 0.4
+        if etf_direction == "outflow":
+            direction = "bearish"
+            driver_name = "Spot ETF outflow pressure"
+            if market_change is not None and market_change < 0:
+                score += 0.4
+                supporting.append("ETF outflow direction aligns with the price decline.")
+            elif market_change is not None and market_change > 0:
+                counter.append("ETF outflow direction does not align with the price rise.")
+        elif etf_direction == "inflow":
+            direction = "bullish"
+            driver_name = "Spot ETF inflow support"
+            if market_change is not None and market_change > 0:
+                score += 0.4
+                supporting.append("ETF inflow direction aligns with the price rise.")
+            elif market_change is not None and market_change < 0:
+                counter.append("ETF inflow direction does not align with the price decline.")
+        if score >= 1.0:
+            candidates.append(
+                _build_candidate(
+                    name=driver_name,
+                    evidence=["btc_spot_etf_flow", etf_source],
+                    explanation="BTC spot ETF flow is treated as an independent spot-demand/supply layer with stale and fallback status disclosed.",
+                    score=score,
+                    source_type="etf_flow",
+                    direction=direction,
+                    supporting_evidence=supporting,
+                    counter_evidence=counter,
+                    missing_evidence=missing,
+                    primary_eligible=primary_eligible,
+                    market=market,
+                    derivatives=derivatives,
+                    onchain=onchain,
+                    extra={"etf_flow_source": etf_source},
+                )
+            )
 
     put_call = derivatives.get("put_call_ratio")
     if put_call is not None and put_call >= 1.2:
@@ -546,20 +677,25 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
     noise.extend(news_noise)
 
     onchain_signal = onchain.get("onchain_signal")
+    onchain_quality = onchain.get("onchain_evidence_quality", "unknown")
+    onchain_primary_eligible = bool(onchain.get("onchain_primary_eligible"))
     if onchain_signal == "exchange_inflow_pressure":
+        onchain_score = 2.2 if onchain_quality == "strong" and market_change is not None and market_change < 0 else 2.0
         candidates.append(
             _build_candidate(
                 name="Potential exchange inflow pressure",
                 evidence=["onchain_transfers", "address_labels"],
                 explanation="Large transfers include exchange-bound flows, which can signal potential sell pressure.",
-                score=2.0,
+                score=onchain_score,
                 source_type="onchain",
                 direction="bearish",
                 supporting_evidence=["Labeled exchange-bound transfers detected."],
                 missing_evidence=["Exchange netflow data unavailable."] if onchain.get("exchange_netflow_24h") is None else [],
+                primary_eligible=onchain_primary_eligible,
                 market=market,
                 derivatives=derivatives,
                 onchain=onchain,
+                extra={"onchain_evidence_quality": onchain_quality},
             )
         )
     elif onchain_signal in {"large_transfer_cluster", "large_transfer_activity"}:
@@ -578,6 +714,7 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
                 market=market,
                 derivatives=derivatives,
                 onchain=onchain,
+                extra={"onchain_evidence_quality": onchain_quality},
             )
         )
     elif onchain_signal == "liquidity_contraction":
@@ -590,10 +727,12 @@ def build_attribution(asset: str, market: dict, derivatives: dict, news: dict, o
                 source_type="onchain",
                 direction="bearish",
                 supporting_evidence=["Stablecoin liquidity contracted over the observed window."],
-                missing_evidence=[],
+                missing_evidence=["Exchange netflow unavailable."],
+                primary_eligible=onchain_primary_eligible,
                 market=market,
                 derivatives=derivatives,
                 onchain=onchain,
+                extra={"onchain_evidence_quality": onchain_quality},
             )
         )
 
