@@ -40,6 +40,18 @@ interface ReportRecord {
   price_now?: number | null;
   price_change_4h_pct?: number | null;
   price_change_24h_pct?: number | null;
+  direction?: string | null;
+  direction_label_zh?: string | null;
+  trigger_reason?: string | null;
+  top_news_title?: string | null;
+  top_news_url?: string | null;
+  top_news_source?: string | null;
+  top_news_json?: {
+    title?: string;
+    url?: string;
+    source?: string;
+    reason_zh?: string;
+  } | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -276,9 +288,10 @@ export default function App() {
     overview: (
       <Overview
         queryDraft={queryDraft}
+        reports={reports.map((report) => report.metadata)}
         onQueryChange={setQueryDraft}
         onGenerateReport={handleGenerateReport}
-        onOpenDetail={() => openReportDetail("overview", currentReportId || reports[0]?.id)}
+        onOpenDetail={(reportId) => openReportDetail("overview", reportId || currentReportId || reports[0]?.id)}
       />
     ),
     reports: <Reports reports={reports.map((report) => report.metadata)} onOpenDetail={(id) => openReportDetail("reports", id)} />,
