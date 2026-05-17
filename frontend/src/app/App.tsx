@@ -172,7 +172,7 @@ export default function App() {
 
   async function checkBackendHealth() {
     try {
-      await requestJson<{ status: string }>("/health", "Backend health check failed");
+      await requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scans?limit=1", "Backend market scan capability check failed");
       setBackendOnline(true);
       setBackendHealth({ online: true, checked: true, apiUrl: getDisplayApiBaseUrl() });
       return true;
