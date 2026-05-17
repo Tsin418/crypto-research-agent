@@ -30,6 +30,16 @@ def test_heuristic_intent_eth_state_scan() -> None:
     assert intent.time_window == "24h"
 
 
+def test_price_refresh_defaults_to_two_minutes(monkeypatch) -> None:
+    monkeypatch.setenv("MARKET_SCAN_CACHE_TTL_MINUTES", "")
+    monkeypatch.setenv("SNAPSHOT_SCHEDULER_INTERVAL_MINUTES", "")
+
+    settings = get_settings()
+
+    assert settings.market_scan_cache_ttl_minutes == 2
+    assert settings.snapshot_scheduler_interval_minutes == 2
+
+
 def test_heuristic_intent_next_24_hours_is_not_4h() -> None:
     intent = _heuristic_intent(ReportRequest(query="What risks should I watch for BTC in the next 24 hours?"))
     assert intent.asset == "BTC"

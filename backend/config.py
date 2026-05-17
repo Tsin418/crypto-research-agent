@@ -129,10 +129,10 @@ def get_settings() -> Settings:
         http_timeout_seconds=_int_env("HTTP_TIMEOUT_SECONDS", 12),
         price_4h_up_threshold_pct=_float_env("PRICE_4H_UP_THRESHOLD_PCT", 1.0),
         price_4h_down_threshold_pct=_float_env("PRICE_4H_DOWN_THRESHOLD_PCT", -1.0),
-        market_scan_cache_ttl_minutes=_int_env("MARKET_SCAN_CACHE_TTL_MINUTES", 15),
+        market_scan_cache_ttl_minutes=_int_env("MARKET_SCAN_CACHE_TTL_MINUTES", 2),
         report_cache_ttl_minutes=_int_env("REPORT_CACHE_TTL_MINUTES", 15),
         snapshot_scheduler_enabled=_bool_env("SNAPSHOT_SCHEDULER_ENABLED", False),
-        snapshot_scheduler_interval_minutes=_int_env("SNAPSHOT_SCHEDULER_INTERVAL_MINUTES", 15),
+        snapshot_scheduler_interval_minutes=_int_env("SNAPSHOT_SCHEDULER_INTERVAL_MINUTES", 2),
         snapshot_scheduler_assets=_tuple_env("SNAPSHOT_SCHEDULER_ASSETS", ("BTC", "ETH")),
         snapshot_scheduler_run_on_startup=_bool_env("SNAPSHOT_SCHEDULER_RUN_ON_STARTUP", False),
     )

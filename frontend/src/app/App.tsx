@@ -40,6 +40,7 @@ type WindowSel = TimeWindow;
 
 const MAX_POLL_RETRIES = 90;
 const POLL_INTERVAL_MS = 2000;
+const BTC_ETH_PRICE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 
 const navItems: { id: Exclude<Page, "detail">; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "Overview", icon: <LayoutDashboard size={14} /> },
@@ -222,6 +223,10 @@ export default function App() {
     void checkBackendHealth();
     void loadReports();
     void loadMarketScans(false);
+    const id = window.setInterval(() => {
+      void loadMarketScans(true);
+    }, BTC_ETH_PRICE_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(id);
   }, []);
 
   function openReportDetail(parent: ParentPage, reportId?: string) {

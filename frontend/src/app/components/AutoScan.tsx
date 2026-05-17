@@ -4,6 +4,7 @@ import { Play, Loader2, TrendingDown, TrendingUp, Minus } from "lucide-react";
 import { requestJson } from "../api";
 
 const emptySparkData = [0, 0, 0, 0, 0, 0, 0];
+const BTC_ETH_PRICE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 
 function trendFor(change: number | null | undefined) {
   if (change === null || change === undefined || change === 0) return "neutral";
@@ -78,13 +79,21 @@ export function AutoScan({ onOpenDetail }: { onOpenDetail?: (reportId?: string) 
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scan", "Failed to load market prices", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ assets: ["BTC", "ETH"], force_refresh: false }),
-    })
-      .then((payload) => setMarketScans(payload.results || []))
-      .catch(() => {});
+    function loadMarketPrices(forceRefresh: boolean) {
+      requestJson<{ results: MarketScanRecord[] }>("/api/research/market-scan", "Failed to load market prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets: ["BTC", "ETH"], force_refresh: forceRefresh }),
+      })
+        .then((payload) => setMarketScans(payload.results || []))
+        .catch(() => {});
+    }
+
+    loadMarketPrices(false);
+    const id = globalThis.setInterval(() => {
+      loadMarketPrices(true);
+    }, BTC_ETH_PRICE_REFRESH_INTERVAL_MS);
+    return () => globalThis.clearInterval(id);
   }, []);
 
   async function handleRun() {
