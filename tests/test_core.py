@@ -16,6 +16,7 @@ from backend.data_onchain import normalize_alchemy_webhook
 from backend.http_client import is_http_forbidden_error
 from backend.intent import _heuristic_intent
 from backend.models import Intent, LayerResult, ReportRequest, ResearchContext
+from backend.orchestrator import build_research_context
 from backend.report import local_report, sanitize_report
 from backend.risk import compute_risk
 from backend.signals import extract_normalized_signals
@@ -496,6 +497,63 @@ def test_4h_direction_classification() -> None:
     assert falling["direction_label_zh"] == "下跌"
     assert neutral["direction"] == "neutral"
     assert neutral["direction_label_zh"] == "震荡"
+
+
+def test_research_context_merges_4h_market_snapshot(monkeypatch, tmp_path) -> None:
+    async def fake_parse_intent(*_):
+        return Intent(asset="ETH", mode="event_attribution", time_window="4h", user_intent="sample")
+
+    async def fake_market_4h(*_):
+        return LayerResult(
+            layer="market_4h",
+            source="coingecko",
+            data={
+                "asset": "ETH",
+                "price_change_4h_pct": -1.25,
+                "direction": "falling",
+                "direction_label_zh": "下跌",
+                "trigger_reason": "ETH 过去 4 小时下跌 1.25%",
+            },
+        )
+
+    async def fake_market(*_):
+        return LayerResult(
+            layer="market",
+            source="market",
+            data={"asset": "ETH", "price_now": 2200, "price_change_24h_pct": -2, "volume_ratio_vs_7d": 1.1},
+        )
+
+    async def fake_derivatives(*_):
+        return LayerResult(layer="derivatives", source="derivatives", data={"derivatives_signal": "derivatives_data_limited"})
+
+    async def fake_news(*_):
+        return LayerResult(layer="news", source="news", data={"events": [], "top_news": {}, "news_signal": "no_relevant_news_found"})
+
+    async def fake_onchain(*_):
+        return LayerResult(layer="onchain", source="onchain", data={"onchain_signal": "eth_onchain_data_limited", "large_transfers": []})
+
+    async def fake_etf(*_, **__):
+        return LayerResult(layer="etf_flow", source="unavailable", data={"etf_flow_signal": "etf_flow_unavailable"})
+
+    async def fake_macro(*_):
+        return LayerResult(layer="macro", source="macro", data={"macro_signal": "unavailable"})
+
+    monkeypatch.setattr("backend.orchestrator.parse_intent", fake_parse_intent)
+    monkeypatch.setattr("backend.orchestrator.fetch_4h_market_snapshot", fake_market_4h)
+    monkeypatch.setattr("backend.orchestrator.fetch_market", fake_market)
+    monkeypatch.setattr("backend.orchestrator.fetch_derivatives", fake_derivatives)
+    monkeypatch.setattr("backend.orchestrator.fetch_news", fake_news)
+    monkeypatch.setattr("backend.orchestrator.fetch_onchain", fake_onchain)
+    monkeypatch.setattr("backend.orchestrator.fetch_etf_flow", fake_etf)
+    monkeypatch.setattr("backend.orchestrator.fetch_macro_context", fake_macro)
+
+    storage = Storage(tmp_path / "research.sqlite3", tmp_path / "events.jsonl")
+    context = asyncio.run(build_research_context(get_settings(), ReportRequest(query="ETH 4h", asset="ETH", time_window="4h"), storage))
+
+    assert context.market.data["price_change_4h_pct"] == -1.25
+    assert context.market.data["direction"] == "falling"
+    assert context.market.data["direction_label_zh"] == "下跌"
+    assert context.market.data["four_hour_layer_source"] == "coingecko"
 
 
 def test_report_cache_ttl_behavior(tmp_path) -> None:

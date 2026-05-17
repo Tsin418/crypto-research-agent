@@ -38,7 +38,7 @@ type ParentPage = "overview" | "reports" | "autoscan";
 type AssetSel = AssetSelection;
 type WindowSel = TimeWindow;
 
-const MAX_POLL_RETRIES = 30;
+const MAX_POLL_RETRIES = 90;
 const POLL_INTERVAL_MS = 2000;
 
 const navItems: { id: Exclude<Page, "detail">; label: string; icon: React.ReactNode }[] = [
@@ -187,7 +187,12 @@ export default function App() {
   async function loadReports() {
     return requestJson<{ reports: ReportRecord[] }>("/api/research/reports?status=all&limit=20", "Failed to load reports")
       .then((payload) => {
-        setReports(payload.reports.map((record) => toResearchReport(record)));
+        setReports((prev) =>
+          payload.reports.map((record) => {
+            const existing = prev.find((report) => report.id === record.report_id);
+            return toResearchReport(record, existing?.dashboardData);
+          })
+        );
         setBackendOnline(true);
       })
       .catch((error) => {
@@ -288,7 +293,7 @@ export default function App() {
       }
 
       if (!reportData || reportData.status === "processing") {
-        throw new Error("Report generation timed out after 60 seconds. Please try again.");
+        throw new Error("Report generation timed out after 180 seconds. Please try again.");
       }
 
       await hydrateReport(reportData);

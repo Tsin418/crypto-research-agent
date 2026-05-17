@@ -8,7 +8,7 @@ from backend.data_derivatives import fetch_derivatives
 from backend.data_etf import fetch_etf_flow
 from backend.data_history import enrich_with_history, save_layer_metric_snapshots
 from backend.data_macro import fetch_macro_context
-from backend.data_market import fetch_market
+from backend.data_market import fetch_4h_market_snapshot, fetch_market
 from backend.data_news import fetch_news
 from backend.data_onchain import fetch_onchain
 from backend.feishu import report_summary, send_feishu_text
@@ -35,16 +35,26 @@ async def build_research_context(settings: Settings, request: ReportRequest, sto
     llm = DeepSeekClient(settings)
     intent = await parse_intent(request, llm)
     time_window = intent.time_window or "24h"
+    market_4h_task = fetch_4h_market_snapshot(settings, intent.asset)
     market_task = fetch_market(settings, intent.asset)
     derivatives_task = fetch_derivatives(settings, intent.asset, storage)
     news_task = fetch_news(settings, intent.asset, time_window, llm)
     onchain_task = fetch_onchain(settings, intent.asset, storage)
-    market, derivatives, news, onchain = await asyncio.gather(
+    market_4h, market, derivatives, news, onchain = await asyncio.gather(
+        market_4h_task,
         market_task,
         derivatives_task,
         news_task,
         onchain_task,
     )
+    market.data.update({
+        key: value
+        for key, value in market_4h.data.items()
+        if key not in {"asset"} and value is not None
+    })
+    market.errors.extend(market_4h.errors)
+    if market_4h.source != "unavailable":
+        market.data["four_hour_layer_source"] = market_4h.source
     etf = await fetch_etf_flow(intent.asset, news=news.data)
     macro = await fetch_macro_context(settings, target_price_change(market.data, time_window))
     market.data = enrich_with_history(storage, intent.asset, "market", market.data)
