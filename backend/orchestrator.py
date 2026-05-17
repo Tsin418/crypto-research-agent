@@ -95,7 +95,7 @@ async def run_report_job(settings: Settings, storage: Storage, report_id: str, r
             )
         storage.save_snapshot(report_id, "risk", "internal_rules", context.risk)
         storage.save_snapshot(report_id, "attribution", "internal_rules", context.attribution)
-        storage.save_normalized_signals(report_id, extract_normalized_signals(context, time_window))
+        storage.save_normalized_signals(report_id, extract_normalized_signals(context, context.intent.time_window or "24h"))
         markdown = await generate_report(context, llm)
         storage.complete_report(
             report_id,
