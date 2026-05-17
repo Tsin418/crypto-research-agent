@@ -23,6 +23,26 @@ class ReportRequest(BaseModel):
     time_window: str | None = None
 
 
+class AutoScanRequest(BaseModel):
+    assets: list[Asset] = Field(default_factory=lambda: ["BTC", "ETH"])
+    time_window: str = "4h"
+    force_refresh: bool = False
+
+
+class MarketScanRequest(BaseModel):
+    assets: list[Asset] = Field(default_factory=lambda: ["BTC", "ETH"])
+    force_refresh: bool = False
+
+
+class MarketScanRecord(BaseModel):
+    asset: Asset
+    price_now: float | None = None
+    price_change_4h_pct: float | None = None
+    direction: Literal["rising", "falling", "neutral"]
+    direction_label_zh: Literal["上涨", "下跌", "震荡"]
+    created_at: str
+
+
 class Intent(BaseModel):
     asset: Asset
     mode: Mode
@@ -44,6 +64,8 @@ class ResearchContext(BaseModel):
     derivatives: LayerResult
     news: LayerResult
     onchain: LayerResult
+    etf: LayerResult | None = None
+    macro: LayerResult | None = None
     risk: dict[str, Any]
     attribution: dict[str, Any]
 
@@ -58,6 +80,16 @@ class StoredReport(BaseModel):
     report_markdown: str | None = None
     risk_score: int | None = None
     risk_level: str | None = None
+    price_now: float | None = None
+    price_change_4h_pct: float | None = None
+    price_change_24h_pct: float | None = None
+    direction: str | None = None
+    direction_label_zh: str | None = None
+    trigger_reason: str | None = None
+    top_news_title: str | None = None
+    top_news_url: str | None = None
+    top_news_source: str | None = None
+    top_news_json: dict[str, Any] | None = None
     error_message: str | None = None
     created_at: str
     updated_at: str

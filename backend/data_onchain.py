@@ -6,6 +6,7 @@ import httpx
 
 from backend.address_labels import apply_transfer_labels
 from backend.config import Settings
+from backend.data_quality import layer_quality, metric_meta
 from backend.data_liquidity import fetch_stablecoin_supply
 from backend.data_staking import fetch_eth_staking_queue
 from backend.http_client import get_json
@@ -63,7 +64,14 @@ def normalize_alchemy_webhook(payload: dict[str, Any], threshold_eth: int) -> li
 
 def _onchain_signal(asset: str, transfers: list[dict], stablecoin_supply_change: float | None) -> str:
     exchange_inflows = [tx for tx in transfers if tx.get("direction") == "potential_sell_pressure"]
-    large_transfers = [tx for tx in transfers if str(tx.get("direction", "")).startswith("large_")]
+    large_transfers = [
+        tx for tx in transfers
+        if tx.get("direction") in (
+            "large_eth_transfer", "large_btc_transfer", "unknown_transfer",
+            "large_transfer_with_partial_labels", "exchange_internal_transfer",
+            "custodian_movement", "bridge_movement",
+        )
+    ]
     if len(exchange_inflows) >= 2:
         return "exchange_inflow_pressure"
     if len(large_transfers) >= 3:
@@ -75,6 +83,57 @@ def _onchain_signal(asset: str, transfers: list[dict], stablecoin_supply_change:
     if asset == "ETH":
         return "eth_onchain_data_limited"
     return "btc_onchain_data_limited"
+
+
+def _evidence_quality(transfers: list[dict], stablecoin_supply_change: float | None) -> dict[str, Any]:
+    exchange_inflows = [tx for tx in transfers if tx.get("direction") == "potential_sell_pressure"]
+    exchange_internal = [tx for tx in transfers if tx.get("direction") == "exchange_internal_transfer"]
+    large_transfers = [
+        tx for tx in transfers
+        if tx.get("direction") in (
+            "large_eth_transfer", "large_btc_transfer", "unknown_transfer",
+            "large_transfer_with_partial_labels",
+        )
+    ]
+    if len(exchange_inflows) >= 2:
+        return {
+            "onchain_evidence_quality": "strong",
+            "onchain_primary_eligible": True,
+            "exchange_inflow_count": len(exchange_inflows),
+            "large_transfer_count": len(large_transfers),
+            "exchange_internal_count": len(exchange_internal),
+        }
+    if len(exchange_inflows) == 1:
+        return {
+            "onchain_evidence_quality": "medium",
+            "onchain_primary_eligible": False,
+            "exchange_inflow_count": len(exchange_inflows),
+            "large_transfer_count": len(large_transfers),
+            "exchange_internal_count": len(exchange_internal),
+        }
+    if large_transfers:
+        return {
+            "onchain_evidence_quality": "weak",
+            "onchain_primary_eligible": False,
+            "exchange_inflow_count": 0,
+            "large_transfer_count": len(large_transfers),
+            "exchange_internal_count": len(exchange_internal),
+        }
+    if stablecoin_supply_change is not None and stablecoin_supply_change < 0:
+        return {
+            "onchain_evidence_quality": "medium",
+            "onchain_primary_eligible": False,
+            "exchange_inflow_count": 0,
+            "large_transfer_count": 0,
+            "exchange_internal_count": len(exchange_internal),
+        }
+    return {
+        "onchain_evidence_quality": "unknown",
+        "onchain_primary_eligible": False,
+        "exchange_inflow_count": 0,
+        "large_transfer_count": 0,
+        "exchange_internal_count": len(exchange_internal),
+    }
 
 
 async def _etherscan_gas(client: httpx.AsyncClient, settings: Settings) -> tuple[dict | None, list[str]]:
@@ -235,6 +294,19 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
             errors.extend(btc_errors)
             transfers.extend(btc_transfers)
 
+    quality = _evidence_quality(transfers, stablecoins.get("stablecoin_supply_change_24h"))
+    evidence_quality = quality.get("onchain_evidence_quality")
+    quality_warnings = [
+        "Exchange netflow is unavailable; transfer direction uses limited address labels.",
+        "Stablecoin supply change is a liquidity proxy, not direct buying pressure.",
+        "Exchange-to-exchange transfers are internal/venue flow with low attribution confidence.",
+        "Issuer or treasury movements are not direct buying pressure.",
+        "Do not describe unknown wallet transfers as confirmed whale selling without labeled exchange destination.",
+    ]
+    if evidence_quality in {"weak", "unknown", None}:
+        quality_warnings.append("Unknown transfers are low confidence and should not be described as confirmed whale intent.")
+    if errors:
+        quality_warnings.append("Some on-chain providers failed or returned incomplete data.")
     data = {
         "asset": asset,
         "exchange_netflow_24h": None,
@@ -257,6 +329,25 @@ async def fetch_onchain(settings: Settings, asset: str, storage: Any | None = No
         "eth_staking_queue": staking.get("eth_staking_queue"),
         "restaking_related_event": None,
         "onchain_signal": _onchain_signal(asset, transfers, stablecoins.get("stablecoin_supply_change_24h")),
+        **quality,
         "note": "ETH/EVM large transfers use Alchemy webhook events plus optional Etherscan watch addresses. BTC large transfers use mempool.space latest block scans.",
     }
+    data["data_quality"] = layer_quality(
+        freshness="fresh" if transfers or stablecoins else "unknown",
+        confidence={"strong": "high", "medium": "medium", "weak": "low", "unknown": "low"}.get(evidence_quality, "low"),
+        methodology="Large-transfer scan plus stablecoin supply proxy; address-label coverage is limited and exchange netflow is unavailable.",
+        warnings=quality_warnings,
+    )
+    data["stablecoin_supply_change_24h_meta"] = metric_meta(
+        methodology="DeFiLlama stablecoin supply delta used as a broad liquidity proxy.",
+        confidence=0.55 if stablecoins.get("stablecoin_supply_change_24h") is not None else 0.2,
+        source="defillama_stablecoins",
+        warning="Stablecoin supply proxy, not direct buying pressure.",
+    )
+    data["exchange_inflow_count_meta"] = metric_meta(
+        methodology="Counts only transfers classified as potential sell pressure by available local labels and rules.",
+        confidence=0.5 if quality.get("exchange_inflow_count") else 0.25,
+        source="local_address_labels_and_transfer_rules",
+        warning="Limited label coverage; unknown transfers remain low confidence.",
+    )
     return LayerResult(layer="onchain", source="etherscan/alchemy_webhooks/mempool.space", data=data, errors=errors)
